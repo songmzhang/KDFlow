@@ -310,4 +310,4 @@ This project is licensed under the [MIT License](LICENSE).
 
 ## ⭐ Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=songmzhang/KDFlow&type=Date)](https://star-history.com/#songmzhang/KDFlow&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=songmzhang/KDFlow&type=date&legend=top-left)](https://www.star-history.com/#songmzhang/KDFlow&type=date&legend=top-left)
