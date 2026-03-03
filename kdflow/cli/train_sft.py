@@ -93,20 +93,6 @@ def train(args):
     
     # load checkpoint
     global_step, start_epoch = 0, 0
-    # if args.train.load_checkpoint and os.path.exists(args.train.ckpt_path):
-    #     _, states = student.load_checkpoint(
-    #         args.train.ckpt_path,
-    #         "None",
-    #         load_module_strict=True,
-    #         load_optimizer_states=True,
-    #         load_lr_scheduler_states=True,
-    #         load_module_only=False
-    #     )
-    #     global_step = states["global_step"]
-    #     start_epoch = global_step // num_update_steps_per_epoch
-    #     start_batch_idx = (global_step % num_update_steps_per_epoch) * strategy.accumulated_gradient
-    #     train_dataloader.sampler.start_index = start_batch_idx
-
     os.makedirs(args.train.save_path, exist_ok=True)
 
     # configure Trainer
