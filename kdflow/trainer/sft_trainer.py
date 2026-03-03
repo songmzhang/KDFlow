@@ -115,7 +115,7 @@ class SFTTrainer:
                     self.logging(micro_step, status)
                 
             self.strategy.log(f"Saving model after epoch {epoch + 1}")
-            save_path = os.path.join(self.args.save_path, f"epoch_{epoch + 1}")
+            save_path = os.path.join(self.args.train.save_path, f"epoch_{epoch + 1}")
             self.strategy.save_model(self.student, self.student.tokenizer, save_path)
 
         total_time = time.time() - self.start_time

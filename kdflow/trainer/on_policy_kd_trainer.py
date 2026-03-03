@@ -182,7 +182,7 @@ class OnPolicyKDTrainer:
         
             # save model after each epoch
             self.strategy.log(f"Saving model after epoch {epoch + 1}")
-            save_path = os.path.join(self.args.save_path, f"epoch_{epoch + 1}")
+            save_path = os.path.join(self.args.train.save_path, f"epoch_{epoch + 1}")
             ray.get(self.student.async_save_model(save_path))
 
 
