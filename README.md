@@ -22,7 +22,7 @@
 - **Colocate Mode** — Teacher and student models **share the same GPUs** via sleep/wakeup mechanism, maximizing GPU utilization.
 - **Teacher on SGLang** — Teacher inference is powered by SGLang Engine, enabling high-throughput prefilling and flexible parallel strategies.
 - **Pluggable KD Algorithms** — Built-in support for Vanilla KD and DSKD (Dual-Space Knowledge Distillation), with easy registration of custom algorithms.
-- **Multiple Loss Functions** — Torch compiled KL divergence, Reverse KL divergence, JS divergence, etc.
+- **Multiple Loss Functions** — Torch compiled KL divergence, Reverse KL divergence, JS divergence, Adaptive KL (AKL), etc.
 - **LoRA Support** — Optional LoRA fine-tuning for the student model.
 - **Wand&b Integration** — Built-in wand&b logging for experiment tracking.
 - **High Training Efficiency** — Achieves **1.4x to 6x** faster distillation compared to mainstream knowledge distillation frameworks.
@@ -132,7 +132,7 @@ bash ./examples/sft/run_qwen3_4b.sh
 | `--kd_ratio` | `0.5` | KD loss weight: `loss = (1 - kd_ratio) * CE + kd_ratio * KD` |
 | `--kd_temperature` | `1.0` | Temperature for softmax in KD |
 | `--kd_algorithm` | `vanilla_kd` | KD algorithm (`vanilla_kd` / `dskd`) |
-| `--kd_loss_fn` | `kl` | Divergence function (like `kl` / `rkl` / `jsd`) |
+| `--kd_loss_fn` | `kl` | Divergence function (like `kl` / `rkl` / `jsd`/ `akl`) |
 | `--teacher_tp_size` | `8` | Teacher tensor parallel size |
 | `--teacher_ep_size` | `1` | Teacher expert parallel size |
 | `--teacher_pp_size` | `1` | Teacher pipeline parallel size |
