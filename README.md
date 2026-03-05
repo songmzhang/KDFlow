@@ -85,6 +85,18 @@ bash ./examples/off_policy_kd/run_qwen3_30b_a3b_to_4b.sh
 bash ./examples/on_policy_kd/run_qwen3_30b_a3b_to_4b.sh
 ```
 
+### Cross-Tokenizer Off-Policy Knowledge Distillation
+
+```bash
+bash ./examples/cross_tokenizer_kd/run_qwen3_30b_a3b_to_llama3_2_3b_offpolicy.sh
+```
+
+### Cross-Tokenizer On-Policy Knowledge Distillation
+
+```bash
+bash ./examples/cross_tokenizer_kd/run_qwen3_30b_a3b_to_llama3_2_3b_onpolicy.sh
+```
+
 ### Supervised Fine-Tuning (SFT)
 
 ```bash
