@@ -1,7 +1,7 @@
 <div align="center">
   <img src="figures/logo.png" alt="KDFlow Logo" width="60%">
 
-  ### **An Efficient Framework for LLM Knowledge Distillation**
+  ### **A User-friendly and Efficient Framework for LLM Knowledge Distillation**
 
   [![GitHub Repo](https://img.shields.io/badge/github-songmzhang%2FKDFlow-black?logo=github)](https://github.com/songmzhang/KDFlow)
   [![License](https://img.shields.io/github/license/songmzhang/KDFlow)](LICENSE)
