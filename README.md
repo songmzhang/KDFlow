@@ -1,3 +1,6 @@
+<p align="center">
+  <img src="figures/logo.png" alt="KDFlow Logo" width="60%">
+</p>
 
 # KDFlow
 
