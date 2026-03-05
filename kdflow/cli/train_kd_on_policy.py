@@ -1,11 +1,6 @@
-import argparse
 import math
-import os
-import sys
-from datetime import datetime
 
 import ray
-from transformers import AutoTokenizer
 
 from kdflow.ray.train.teacher_group import TeacherActorGroup
 from kdflow.ray.train.student_group import StudentActorGroup
@@ -18,6 +13,7 @@ from kdflow.models.utils import check_tokenizer_identical
 from kdflow.backend import get_strategy
 from kdflow.arguments import init_args
 from kdflow.utils.distributed_sampler import DistributedSampler
+from kdflow.utils.utils import get_tokenizer
 
 
 def train(args):
@@ -67,14 +63,12 @@ def train(args):
     )
     
     # Initialize tokenizers
-    student_tokenizer = AutoTokenizer.from_pretrained(
+    student_tokenizer = get_tokenizer(
         args.model.student_name_or_path,
-        trust_remote_code=True,
         use_fast=not args.model.disable_fast_tokenizer
     )
-    teacher_tokenizer = AutoTokenizer.from_pretrained(
+    teacher_tokenizer = get_tokenizer(
         args.model.teacher_name_or_path,
-        trust_remote_code=True,
         use_fast=not args.model.disable_fast_tokenizer
     )
     tokenizer_info = check_tokenizer_identical(student_tokenizer, teacher_tokenizer)

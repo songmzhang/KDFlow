@@ -8,7 +8,6 @@ import torch.nn.functional as F
 from kdflow.loss import build_loss_fn
 from kdflow.algorithms import register_algorithm
 from kdflow.loss.cross_entropy import compute_cross_entropy
-from kdflow.loss.reverse_kl_div import compute_reverse_kl_div
 from kdflow.utils.logging_utils import init_logger
 
 
@@ -139,10 +138,6 @@ class DSKD:
 
         student_hiddens = student_hiddens[student_loss_mask]
         student_logits = student_logits[student_loss_mask]
-        minV = min(teacher_logits.shape[-1], student_logits.shape[-1])
-        teacher_logits = teacher_logits[:, :minV]
-        student_logits = student_logits[:, :minV]
-        assert teacher_logits.shape == student_logits.shape
         
         if self.vocab_identical:
             loss_info = self._compute_dskd_loss(
@@ -454,18 +449,20 @@ class DSKD:
         t2s_align, s2t_align = [], []
         history_tea_seq, history_stu_seq = "", ""
 
+        tea_eos = self.teacher_tokenizer.eos_token
+        stu_eos = self.student_tokenizer.eos_token
+
         tea_seq = [token.replace('▁', '').replace('Ġ', '') for token in tea_seq]
         stu_seq = [token.replace('▁', '').replace('Ġ', '') for token in stu_seq]
 
         while i < len(tea_seq) and j < len(stu_seq):
+            is_eos_match = (tea_seq[i] == tea_eos and stu_seq[j] == stu_eos)
             if history_tea_seq == history_stu_seq and (
-                tea_seq[i] == stu_seq[j] or (
-                    tea_seq[i] == self.teacher_tokenizer.eos_token and \
-                    stu_seq[j] == self.student_tokenizer.eos_token
-                )
+                tea_seq[i] == stu_seq[j] or is_eos_match
             ):
-                history_tea_seq += tea_seq[i]
-                history_stu_seq += stu_seq[j]
+                common_text = tea_seq[i]
+                history_tea_seq += common_text
+                history_stu_seq += common_text
                 t2s_align.append(i)
                 s2t_align.append(j)
                 i += 1

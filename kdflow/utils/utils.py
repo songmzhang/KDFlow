@@ -4,14 +4,18 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer
 
+from kdflow.utils.logging_utils import init_logger
+
+logger = init_logger(__name__)
 
 
-def get_tokenizer(pretrain, model=None, padding_side="left", use_fast=True):
-    tokenizer = AutoTokenizer.from_pretrained(pretrain, trust_remote_code=True, use_fast=use_fast)
+def get_tokenizer(model_name_or_path, model=None, padding_side="left", use_fast=True):
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True, use_fast=use_fast)
     tokenizer.padding_side = padding_side
     # NOTE: When enable vLLM, do not resize_token_embeddings, or the vocab size will mismatch with vLLM.
     # https://github.com/facebookresearch/llama-recipes/pull/196
     if tokenizer.pad_token is None:
+        logger.info("Detect no pad_token in tokenizer, set it to eos_token.")
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
         if model is not None:
