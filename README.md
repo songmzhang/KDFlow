@@ -10,14 +10,6 @@
 
 </div>
 
-# KDFlow
-
-**KDFlow** is a user-friendly and efficient knowledge distillation framework for large language models (LLMs), built on top of **Ray**, **FSDP2**, and **SGLang**. It supports both **off-policy** and **on-policy** knowledge distillation, enabling efficient transfer of knowledge from a large teacher model to a smaller student model.
-
-<p align="left">
-  📄 <a href="https://arxiv.org/pdf/2603.01875">Paper (arXiv)</a>
-</p>
-
 ---
 
 ## ✨ Key Features
