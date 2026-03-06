@@ -73,8 +73,8 @@ def train(args):
     )
     tokenizer_info = check_tokenizer_identical(student_tokenizer, teacher_tokenizer)
     strategy.print(f"Tokenizers {tokenizer_info}")
-    if not tokenizer_info.vocab_identical and args.kd.kd_algorithm != "dskd":
-        raise ValueError("Student and teacher tokenizers are not identical. Please use DSKD algorithm for cross-tokenizer KD or ensure tokenizers are the same.")
+    if not tokenizer_info.vocab_identical and args.kd.kd_algorithm not in  ["dskd", "simple_ctkd"]:
+        raise ValueError("Student and teacher tokenizers are not identical. Please use DSKD or SimpleCrossToknizerKD algorithm for cross-tokenizer KD or ensure tokenizers are the same.")
     
     # Load and prepare training dataset
     train_data = blending_datasets(
