@@ -87,11 +87,25 @@ bash ./examples/on_policy_kd/run_qwen3_30b_a3b_to_4b.sh
 
 ### Cross-Tokenizer Off-Policy Knowledge Distillation
 
+Use SimpleCrossTokenizerKD (suggested):
+```bash
+bash ./examples/cross_tokenizer_kd/run_qwen3_30b_a3b_to_llama3_2_3b_offpolicy_simple_ctkd.sh
+```
+
+or DSKD:
+
 ```bash
 bash ./examples/cross_tokenizer_kd/run_qwen3_30b_a3b_to_llama3_2_3b_offpolicy.sh
 ```
 
 ### Cross-Tokenizer On-Policy Knowledge Distillation
+
+Use SimpleCrossTokenizerKD (suggested):
+```bash
+bash ./examples/cross_tokenizer_kd/run_qwen3_30b_a3b_to_llama3_2_3b_onpolicy_simple_ctkd.sh
+```
+
+or DSKD:
 
 ```bash
 bash ./examples/cross_tokenizer_kd/run_qwen3_30b_a3b_to_llama3_2_3b_onpolicy.sh
