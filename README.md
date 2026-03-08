@@ -128,7 +128,7 @@ bash ./examples/sft/run_qwen3_4b.sh
 | `--student_name_or_path` | `None` | Student model name or path |
 | `--teacher_name_or_path` | `None` | Teacher model name or path |
 | `--attn_implementation` | `flash_attention_2` | Attention implementation |
-| `--use_liger_kernel` | `False` | Use Liger Kernel for teacher model |
+| `--use_liger_kernel` | `False` | Use Liger Kernel for student model |
 | `--lora_rank` | `0` | LoRA rank (0 = disabled) |
 | `--lora_alpha` | `16` | LoRA alpha |
 | `--ring_attn_size` | `1` | Ring attention group size |
