@@ -176,19 +176,6 @@ class TeacherActorGroup:
         indexed_results.sort(key=lambda x: x[0])
         results = [batch for _, batch in indexed_results]
         
-        # # Convert numpy arrays to pinned memory tensors for faster async CPU->GPU transfer
-        # # Pin memory allows non_blocking=True in .to(device) to truly overlap with computation
-        # for batch in results:
-        #     if "teacher_hiddens" in batch and isinstance(batch["teacher_hiddens"], np.ndarray):
-        #         tensor = torch.from_numpy(batch["teacher_hiddens"])
-        #         # Use pin_memory for faster async transfer to GPU
-        #         batch["teacher_hiddens"] = tensor.pin_memory()
-            
-        #     # Also pin other large tensors that will be transferred to GPU
-        #     for key in batch:
-        #         if key in batch and isinstance(batch[key], torch.Tensor) and not batch[key].is_pinned():
-        #             batch[key] = batch[key].pin_memory()
-        
         return results
     
     def sleep(self):
@@ -198,3 +185,8 @@ class TeacherActorGroup:
     def wakeup(self):
         """Resume GPU memory on all teacher engines."""
         ray.get([actor.wakeup.remote() for actor in self.teacher_engines])
+        
+    def shutdown(self):
+        """Shutdown all teacher engines."""
+        ray.get([actor.shutdown.remote() for actor in self.teacher_engines])
+        logger.info("[TeacherActorGroup] All teacher actors shutdown complete.") 
