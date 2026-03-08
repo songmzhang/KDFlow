@@ -170,6 +170,8 @@ def train(args):
     # Save final model
     ray.get(student_model.async_save_model())
     strategy.log("Training completed and model saved.")
+    
+    teacher_model.shutdown()
 
 
 if __name__ == "__main__":
