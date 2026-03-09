@@ -30,17 +30,22 @@ class DataArguments:
         default="messages",
         metadata={"help": "JSON dataset key."}
     )
+    image_key: str = field(
+        default=None,
+        metadata={"help": "Image key in dataset."}
+    )
     output_key: str = field(
         default=None,
+        metadata={"help": "Output key in dataset."}
     )
     teacher_input_key: str = field(
         default=None,
-        metadata={"help": "JSON dataset key for teacher prompt. If None, use the same input_key as student. "
+        metadata={"help": "Input key for teacher prompt. If None, use the same input_key as student. "
                           "Used in self-distillation where teacher receives richer information."}
     )
     label_key: str = field(
         default=None,
-        metadata={"help": "JSON dataset key."}
+        metadata={"help": "Label key in dataset."}
     )
     input_template: str = field(
         default=None,

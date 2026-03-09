@@ -84,6 +84,7 @@ class DistillModel(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         allgather_logits=False,
         ring_attn_group: Optional[dist.ProcessGroup] = None,
+        **kwargs,
     ) -> torch.Tensor:
         """Returns action log probs"""
         batch, seqlen = sequences.size()
@@ -97,7 +98,7 @@ class DistillModel(nn.Module):
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
 
-        output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids, output_hidden_states=True)
+        output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids, output_hidden_states=True, **kwargs)
         output["logits"] = output["logits"].to(torch.float32)
         
         if allgather_logits and self.packing_samples:

@@ -138,11 +138,14 @@ def _handle_generate(engine, request, shm_pool, shm_pool_name,
                      request_queue, response_queue):
     """Handle a generate request: run inference and write hidden states to shared memory."""
     kwargs = request["kwargs"]
-    outputs = engine.generate(
-        input_ids=kwargs["input_ids"],
-        sampling_params=kwargs["sampling_params"],
-        return_hidden_states=kwargs.get("return_hidden_states", True),
-    )
+    generate_kwargs = {
+        "input_ids": kwargs["input_ids"],
+        "sampling_params": kwargs["sampling_params"],
+        "return_hidden_states": kwargs.get("return_hidden_states", True),
+    }
+    if kwargs.get("image_data") is not None:
+        generate_kwargs["image_data"] = kwargs["image_data"]
+    outputs = engine.generate(**generate_kwargs)
 
     offsets_meta = []
     current_offset = 0
@@ -247,19 +250,24 @@ class SGLangEngineService:
         loss_masks: List[np.ndarray],
         sampling_params: Dict[str, Any],
         return_hidden_states: bool = True,
+        image_data=None,
     ) -> List[np.ndarray]:
         """Run generation and return hidden states via shared memory."""
         if not self._started:
             raise RuntimeError("Service not started")
 
+        kwargs = {
+            "input_ids": input_ids,
+            "loss_masks": loss_masks,
+            "sampling_params": sampling_params,
+            "return_hidden_states": return_hidden_states,
+        }
+        if image_data is not None:
+            kwargs["image_data"] = image_data
+
         self.request_queue.put({
             "type": "generate",
-            "kwargs": {
-                "input_ids": input_ids,
-                "loss_masks": loss_masks,
-                "sampling_params": sampling_params,
-                "return_hidden_states": return_hidden_states,
-            },
+            "kwargs": kwargs,
         })
 
         response = self.response_queue.get()

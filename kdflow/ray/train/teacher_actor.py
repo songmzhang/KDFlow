@@ -6,6 +6,7 @@ import torch
 import numpy as np
 from transformers import AutoConfig
 
+from kdflow.datasets.utils import load_images
 from kdflow.utils.utils import remove_pad_token
 from kdflow.backend.sglang.sglang_engine import SGLangEngineService, EngineConfig
 from kdflow.utils.logging_utils import init_logger
@@ -120,12 +121,16 @@ class TeacherRayActor:
         unpadded_loss_mask = [m.numpy().astype(bool) for m in unpadded_loss_mask]
         
         # === Phase 2: SGLang Generate ===
-        # Use engine service to generate (runs in subprocess)
+        image_data = None
+        if batches[0].get("image_paths") is not None:
+            all_image_paths = sum((micro_batch["image_paths"] for micro_batch in batches), [])
+            image_data = [load_images(paths) if paths else None for paths in all_image_paths]
         hidden_states_list = self.engine_service.generate(
             input_ids=unpadded_input_ids,
             loss_masks=unpadded_loss_mask,
             sampling_params={"max_new_tokens": 0},
             return_hidden_states=True,
+            image_data=image_data,
         )
         
         # Process in micro-batch groups with vectorized operations

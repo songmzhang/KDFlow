@@ -9,6 +9,7 @@ import ray
 import torch
 import torch.distributed as dist
 
+from kdflow.datasets.utils import load_images
 from kdflow.utils.logging_utils import init_logger
 from kdflow.utils.utils import zero_pad_sequences
 
@@ -65,6 +66,17 @@ class OnPolicyKDTrainer:
         self.num_update_steps_per_epoch = num_update_steps_per_epoch
         self.generate_kwargs = generate_kwargs
         self.epochs = self.args.train.num_epochs
+        
+        self.image_key = getattr(self.args.data, "image_key", None)
+        self.stu_processor = None
+        self.tea_processor = None
+        if self.image_key:
+            from transformers import AutoProcessor
+            self.stu_processor = AutoProcessor.from_pretrained(self.args.model.student_name_or_path)
+            if not self.is_same_tokenizer:
+                self.tea_processor = AutoProcessor.from_pretrained(self.args.model.teacher_name_or_path)
+            else:
+                self.tea_processor = self.stu_processor
         self.world_size = self.args.train.num_nodes * self.args.train.num_gpus_per_node
         
         assert self.args.kd.kd_ratio == 1.0, "On-policy KD only supports kd_ratio=1.0."
@@ -212,12 +224,15 @@ class OnPolicyKDTrainer:
         all_stu_prompts = [item["stu_prompt"] for item in prompt_batch]
         all_tea_prompts = [item["tea_prompt"] for item in prompt_batch]
         all_labels = [item["label"] for item in prompt_batch]
+        all_image_paths = [item.get("image_paths") for item in prompt_batch] if self.image_key else None
         
         # Expand prompt list based on the number of samples per prompt
         n_samples_per_prompt = self.args.rollout.n_samples_per_prompt
         all_stu_prompts = sum([[p] * n_samples_per_prompt for p in all_stu_prompts], [])
         all_tea_prompts = sum([[p] * n_samples_per_prompt for p in all_tea_prompts], [])
         all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
+        if all_image_paths:
+            all_image_paths = sum([[p] * n_samples_per_prompt for p in all_image_paths], [])
         
         all_outputs = self.rollout_group.generate(all_stu_prompts, self.generate_kwargs)
 
@@ -230,6 +245,8 @@ class OnPolicyKDTrainer:
                 label=all_labels[i],
                 max_response_length=max_response_length,
                 truncate_length=truncate_length,
+                images=load_images(all_image_paths[i]) if all_image_paths and all_image_paths[i] else None,
+                image_paths=all_image_paths[i] if all_image_paths else None,
             )
             for i in range(len(all_outputs))
         ]
@@ -277,6 +294,7 @@ class OnPolicyKDTrainer:
         tokenizer: Callable,
         prefix: str,
         truncate_length: int,
+        images=None,
     ) -> Dict[str, Any]:
         """
         Tokenize prompt and response for a specific model (student or teacher).
@@ -287,28 +305,42 @@ class OnPolicyKDTrainer:
             tokenizer: The tokenizer to use
             prefix: Either 'stu' or 'tea'
             truncate_length: Maximum sequence length
+            images: List of image paths
             
         Returns:
             Dict with {prefix}_input_ids, {prefix}_attn_mask, {prefix}_loss_mask
         """
-        # Tokenize prompt
-        prompt_tokens = tokenizer(prompt, add_special_tokens=False)
-        prompt_len = len(prompt_tokens["input_ids"])
-        
-        # Ensure response ends with EOS token
         resp_str = response
         if not resp_str.endswith(tokenizer.eos_token):
             resp_str += " " + tokenizer.eos_token
+
+        processor = self.stu_processor if prefix == "stu" else self.tea_processor
+        if images and processor:
+            prompt_inputs = processor(text=prompt, images=images, return_tensors="pt", padding=False)
+            prompt_len = prompt_inputs["input_ids"].squeeze().shape[0]
+            full_text = prompt + resp_str
+            full_inputs = processor(text=full_text, images=images, return_tensors="pt", padding=False)
+            full_len = full_inputs["input_ids"].squeeze().shape[0]
+            input_ids = full_inputs["input_ids"].squeeze()[:truncate_length]
+            attn_mask = full_inputs["attention_mask"].squeeze()[:truncate_length]
+            loss_mask = torch.tensor([False] * prompt_len + [True] * (full_len - prompt_len))[:truncate_length].roll(shifts=-1)
+            result = {
+                f"{prefix}_input_ids": input_ids,
+                f"{prefix}_attn_mask": attn_mask,
+                f"{prefix}_loss_mask": loss_mask,
+            }
+            for key in full_inputs:
+                if key not in ("input_ids", "attention_mask"):
+                    result[f"{prefix}_{key}"] = full_inputs[key].squeeze()
+            return result
+
+        prompt_tokens = tokenizer(prompt, add_special_tokens=False)
+        prompt_len = len(prompt_tokens["input_ids"])
         resp_tokens = tokenizer(resp_str, add_special_tokens=False)
         resp_len = len(resp_tokens["input_ids"])
-        
         input_ids = prompt_tokens["input_ids"] + resp_tokens["input_ids"]
         attn_mask = prompt_tokens["attention_mask"] + resp_tokens["attention_mask"]
-        
-        # Build loss_mask and shift for next-token prediction alignment (consistent with sft_dataset.py)
         loss_mask = [False] * prompt_len + [True] * resp_len
-        
-        # Truncate to max length
         input_ids = torch.tensor(input_ids[:truncate_length])
         attn_mask = torch.tensor(attn_mask[:truncate_length])
         loss_mask = torch.tensor(loss_mask[:truncate_length]).roll(shifts=-1)
@@ -327,6 +359,8 @@ class OnPolicyKDTrainer:
         label: str,
         max_response_length: int,
         truncate_length: int,
+        images=None,
+        image_paths=None,
     ) -> Dict[str, Any]:
         """
         Build a single rollout sample with both student and teacher tokenizations.
@@ -346,16 +380,13 @@ class OnPolicyKDTrainer:
         response_ids = output["output_ids"]
         response_text = output["text"]
         
-        # Build student tokenization with loss_mask
         stu_tokens = self._tokenize_for_model(
-            stu_prompt, response_text, self.student_tokenizer, "stu", truncate_length
+            stu_prompt, response_text, self.student_tokenizer, "stu", truncate_length, images=images
         )
         
-        # Build teacher tokenization with loss_mask
-        # Re-tokenize for teacher if tokenizer differs or prompt differs (e.g., self-distillation)
         if not self.is_same_tokenizer or tea_prompt != stu_prompt:
             tea_tokens = self._tokenize_for_model(
-                tea_prompt, response_text, self.teacher_tokenizer, "tea", truncate_length
+                tea_prompt, response_text, self.teacher_tokenizer, "tea", truncate_length, images=images
             )
         else:
             # Same tokenizer and same prompt, just copy all fields including loss_mask
@@ -372,18 +403,14 @@ class OnPolicyKDTrainer:
         total_length = stu_tokens["stu_attn_mask"].float().sum()
         is_clipped = response_length >= max_response_length
         
-        # Build sample dict
         sample = {
-            # Student-specific fields
             "stu_input_ids": stu_tokens["stu_input_ids"].unsqueeze(0),
             "stu_attn_mask": stu_tokens["stu_attn_mask"].unsqueeze(0),
             "stu_loss_mask": stu_tokens["stu_loss_mask"].unsqueeze(0),
             "rollout_log_probs": rollout_log_probs.unsqueeze(0) if rollout_log_probs is not None else None,
-            # Teacher-specific fields
             "tea_input_ids": tea_tokens["tea_input_ids"].unsqueeze(0),
             "tea_attn_mask": tea_tokens["tea_attn_mask"].unsqueeze(0),
             "tea_loss_mask": tea_tokens["tea_loss_mask"].unsqueeze(0),
-            # Metadata
             "stu_prompts": [stu_prompt],
             "stu_responses": [response_text],
             "tea_prompts": [tea_prompt],
@@ -392,7 +419,11 @@ class OnPolicyKDTrainer:
             "total_length": torch.FloatTensor([total_length]),
             "response_clip_ratio": torch.FloatTensor([is_clipped]),
         }
-        
+        for k, v in stu_tokens.items():
+            if k not in sample:
+                sample[k] = v.unsqueeze(0) if isinstance(v, torch.Tensor) else v
+        if image_paths:
+            sample["image_paths"] = [image_paths]
         return sample
             
     def logging(self):

@@ -48,6 +48,7 @@ class PromptDataset(Dataset):
         self.teacher_input_key = getattr(self.strategy.args.data, "teacher_input_key", None) or self.input_key
         self.label_key = getattr(self.strategy.args.data, "label_key", None)
         self.apply_chat_template = getattr(self.strategy.args.data, "apply_chat_template", False)
+        self.image_key = getattr(self.strategy.args.data, "image_key", None)
         self.enable_thinking = self.strategy.args.model.enable_thinking
 
         # Truncate dataset if max_data_num is specified
@@ -108,14 +109,19 @@ class PromptDataset(Dataset):
         else:
             tea_prompt = self._build_prompt(data, self.teacher_tokenizer, self.teacher_input_key)
         
-        return {
+        result = {
             "stu_prompt": stu_prompt,
             "tea_prompt": tea_prompt,
-            # Keep legacy field for backward compatibility
             "prompt": stu_prompt,
             "label": data.get(self.label_key, "") if self.label_key else "",
             "datasource": data.get("datasource", "default"),
         }
+        if self.image_key:
+            image_paths = data.get(self.image_key)
+            if isinstance(image_paths, str):
+                image_paths = [image_paths]
+            result["image_paths"] = image_paths or []
+        return result
 
     def __len__(self) -> int:
         return len(self.processed_dataset)
@@ -127,12 +133,15 @@ class PromptDataset(Dataset):
             Dict with keys: datasource, stu_prompt, tea_prompt, label
         """
         item = self.processed_dataset[idx]
-        return {
+        result = {
             "datasource": item["datasource"],
             "stu_prompt": item["stu_prompt"],
             "tea_prompt": item["tea_prompt"],
             "label": item["label"],
         }
+        if "image_paths" in item:
+            result["image_paths"] = item["image_paths"]
+        return result
 
     @staticmethod
     def collate_fn(batch: List[Dict[str, str]]) -> List[Dict[str, str]]:

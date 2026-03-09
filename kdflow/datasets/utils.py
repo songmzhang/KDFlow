@@ -1,5 +1,6 @@
 import os
 
+from PIL import Image
 from datasets import interleave_datasets, load_dataset, load_from_disk
 
 
@@ -222,3 +223,16 @@ def convert_to_openai_messages(data):
         f"Unsupported data format. Expected OpenAI messages, ShareGPT, Alpaca, or plain string. "
         f"Got: {type(data)} with keys/content: {data if isinstance(data, str) else list(data[0].keys()) if isinstance(data, list) and data else data}"
     )
+
+
+def load_images(image_paths):
+    """Load images from paths, return list of PIL Images. Returns None if no images."""
+    if not image_paths:
+        return None
+    images = []
+    for path in image_paths:
+        if isinstance(path, str):
+            images.append(Image.open(path).convert("RGB"))
+        elif isinstance(path, Image.Image):
+            images.append(path)
+    return images if images else None
