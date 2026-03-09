@@ -234,7 +234,7 @@ class OnPolicyKDTrainer:
         if all_image_paths:
             all_image_paths = sum([[p] * n_samples_per_prompt for p in all_image_paths], [])
         
-        all_outputs = self.rollout_group.generate(all_stu_prompts, self.generate_kwargs)
+        all_outputs = self.rollout_group.generate(all_stu_prompts, self.generate_kwargs, image_data=all_image_paths)
 
         # Process outputs into rollout samples
         sample_list = [

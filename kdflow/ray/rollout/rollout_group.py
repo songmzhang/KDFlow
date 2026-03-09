@@ -232,6 +232,7 @@ class RolloutActorGroup:
         self,
         prompts: List[str],
         sampling_params: Optional[Dict[str, Any]] = None,
+        image_data: Optional[List] = None,
     ) -> List[Dict[str, Any]]:
         """Generate responses for a batch of prompts via the SGLang router."""
         if sampling_params is None:
@@ -249,6 +250,7 @@ class RolloutActorGroup:
                     prompts=prompts,
                     sampling_params=sampling_params,
                     max_concurrent=self.max_concurrent,
+                    image_data=image_data,
                 )
             )
         finally:
@@ -338,6 +340,7 @@ class RolloutActorGroup:
         prompts: List[str],
         sampling_params: Dict[str, Any],
         max_concurrent: int = 64,
+        image_data: Optional[List] = None,
     ) -> List[Dict[str, Any]]:
         """Send generation requests to the SGLang router asynchronously."""
         import aiohttp
@@ -350,6 +353,8 @@ class RolloutActorGroup:
                 "text": prompt,
                 "sampling_params": sampling_params,
             }
+            if image_data and image_data[idx] is not None:
+                payload["image_data"] = image_data[idx]
             async with semaphore:
                 async with session.post(router_url, json=payload) as resp:
                     resp.raise_for_status()
