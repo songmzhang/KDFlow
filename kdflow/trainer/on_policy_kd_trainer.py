@@ -251,8 +251,6 @@ class OnPolicyKDTrainer:
             for i in range(len(all_outputs))
         ]
         
-        logger.info(f"Rollout {len(prompt_batch)} x {n_samples_per_prompt} = {len(sample_list)} samples")
-            
         # Print sample for debugging
         sample0 = sample_list[0]["stu_prompts"][0] + sample_list[0]["stu_responses"][0]
         if self.args.rollout.print_rollout_sample:
