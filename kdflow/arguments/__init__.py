@@ -75,6 +75,14 @@ def init_args():
                 "[Warning] --packing_samples is not supported with image data. Disabling packing_samples."
             )
             args.data.packing_samples = False
+            
+    if args.rollout.rollout_num_engines > 0:
+        if args.rollout.rollout_num_engines * args.rollout.rollout_tp_size < args.train.num_nodes * args.train.num_gpus_per_node:
+            args.rollout.rollout_num_engines = args.train.num_nodes * args.train.num_gpus_per_node // args.rollout.rollout_tp_size
+            print(
+                "[Warning] rollout_num_engines * rollout_tp_size is less than total GPUs. "
+                f"Automatically increase rollout_num_engines to {args.rollout.rollout_num_engines}."
+            )
     
     # Validate teacher parallelism settings against available GPUs
     args.kd.validate_teacher_parallelism(args.train.num_nodes, args.train.num_gpus_per_node)

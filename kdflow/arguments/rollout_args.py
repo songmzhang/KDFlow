@@ -7,11 +7,11 @@ class RolloutArguments:
     """ Arguments for rollout (on-policy distillation)."""
     
     rollout_num_engines: int = field(
-        default=4,
+        default=0,
         metadata={"help": "The number of engines for rollout."}
     )
     rollout_tp_size: int = field(
-        default=2,
+        default=1,
         metadata={"help": "Tensor parallel size for each vLLM engine."}
     )
     rollout_enable_sleep: bool = field(
