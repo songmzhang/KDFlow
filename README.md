@@ -14,7 +14,7 @@
 
 ## 📰 News
 
-- **[2026/03]** 🎉 KDFlow v0.1.1 released! Add support for **vision-language (multimodal) models** and **Qwen3.5 series**.
+- **[2026/03]** 🎉 KDFlow v0.1.1 released! Now supports **vision-language (multimodal) models** and **Qwen3.5 series**.
 
 ---
 
