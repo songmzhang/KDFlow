@@ -5,11 +5,10 @@ import torch.distributed as dist
 import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
-from transformers import AutoModelForCausalLM, AutoConfig
+from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoConfig
 
 from kdflow.utils import get_tokenizer
-
-from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
+from kdflow.models.ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
 
 
 class DistillModel(nn.Module):
@@ -18,6 +17,7 @@ class DistillModel(nn.Module):
 
     Args:
         args (Arguments): Arguments.
+        strategy (Strategy): Strategy for student model loading and training.
         device_map (dict, optional): Device mapping for loading the model onto specific devices. Defaults to None.
     """
 
@@ -36,15 +36,23 @@ class DistillModel(nn.Module):
         # Support multiple attention mechanism implementations
         attn_impl = self.args.model.attn_implementation
 
-        if self.args.model.use_liger_kernel:
+        self.model_config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+        
+        # Determine if this is a Vision-Language model
+        self.is_vl_model = hasattr(self.model_config, "vision_config")
+        
+        if self.is_vl_model:
+            model_class = AutoModelForImageTextToText
+        elif self.args.model.use_liger_kernel:
             from liger_kernel.transformers import AutoLigerKernelForCausalLM
-
             model_class = AutoLigerKernelForCausalLM
         else:
             model_class = AutoModelForCausalLM
-            
-        self.model_config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
-        self.hidden_size = self.model_config.hidden_size
+
+        if hasattr(self.model_config, "text_config"):
+            self.hidden_size = self.model_config.text_config.hidden_size
+        else:
+            self.hidden_size = self.model_config.hidden_size
         
         self.model = strategy.load_hf_model(
             model_class, 
@@ -113,7 +121,7 @@ class DistillModel(nn.Module):
         return output
 
     def _print_model(self):
-        self.strategy.print(f"Student Model: \n  {self}")
+        self.strategy.print(f"Student Model: \n  {self.model}")
     
     def gradient_checkpointing_enable(self):
         self.model.gradient_checkpointing_enable(

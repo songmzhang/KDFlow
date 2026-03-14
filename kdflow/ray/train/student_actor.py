@@ -96,7 +96,6 @@ class StudentRayActor:
 
         # Only initialize student model
         self.student = DistillModel(strategy)
-        strategy.print(self.student)
         self.student = strategy.prepare(self.student)
         
         # configure optimizer
@@ -174,6 +173,8 @@ class StudentRayActor:
         logger.info(f"Loading only lm_head from {model_name_or_path}...")
         config = AutoConfig.from_pretrained(model_name_or_path)
         is_local = os.path.exists(model_name_or_path)
+        hidden_size = config.hidden_size if not hasattr(config, "text_config") else config.text_config.hidden_size
+        vocab_size = config.vocab_size if not hasattr(config, "text_config") else config.text_config.vocab_size
 
         def resolve_file(filename):
             if is_local:
@@ -223,11 +224,11 @@ class StudentRayActor:
             raise ValueError(f"Key '{weight_key}' not found. Available: {list(state_dict.keys())[:10]}...")
         weight = state_dict[weight_key]
 
-        assert weight.shape == (config.vocab_size, config.hidden_size), \
-            f"Shape mismatch: expected ({config.vocab_size}, {config.hidden_size}), got {weight.shape}"
+        assert weight.shape == (vocab_size, hidden_size), \
+            f"Shape mismatch: expected ({vocab_size}, {hidden_size}), got {weight.shape}"
 
         has_bias = "lm_head.bias" in state_dict
-        lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=has_bias)
+        lm_head = nn.Linear(hidden_size, vocab_size, bias=has_bias)
         lm_head.weight = nn.Parameter(weight.to(dtype=dtype))
         if has_bias:
             lm_head.bias = nn.Parameter(state_dict["lm_head.bias"].to(dtype=dtype))

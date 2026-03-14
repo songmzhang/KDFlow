@@ -1,8 +1,9 @@
 from typing import Callable, Optional, Dict, Any, List
 
 from torch.utils.data import Dataset
+from PIL import Image
 
-from kdflow.datasets.utils import convert_to_openai_messages
+from kdflow.datasets.utils import convert_to_openai_messages, get_tokenizer_or_processor
 from kdflow.models.utils import TokenizerCompareResult
 
 
@@ -12,10 +13,9 @@ class PromptDataset(Dataset):
 
     Args:
         dataset: dataset for on-policy distillation
-        student_tokenizer: tokenizer for student model
         strategy: training strategy object
-        teacher_tokenizer: optional tokenizer for teacher model
         tokenizer_info: result of tokenizer comparison (template_identical, vocab_identical)
+        max_data_num: maximum number of data to load
         input_template: optional template for formatting input
         num_processors: number of processors for parallel data loading
     """
@@ -23,33 +23,44 @@ class PromptDataset(Dataset):
     def __init__(
         self,
         dataset,
-        student_tokenizer: Callable,
         strategy,
-        teacher_tokenizer: Optional[Callable] = None,
         tokenizer_info: Optional[TokenizerCompareResult] = None,
         max_data_num: int = None,
         input_template: Optional[str] = None,
         num_processors: int = 8,
     ) -> None:
         super().__init__()
-        self.student_tokenizer = student_tokenizer
-        self.teacher_tokenizer = teacher_tokenizer if teacher_tokenizer else student_tokenizer
+        self.args = strategy.args
+        self.strategy = strategy
         self.tokenizer_info = tokenizer_info or TokenizerCompareResult()
         self.template_identical = self.tokenizer_info.template_identical
         self.vocab_identical = self.tokenizer_info.vocab_identical
+        self.same_tokenizer = self.template_identical and self.vocab_identical
         self.strategy = strategy
         self.input_template = input_template
         
-        # For backward compatibility
-        self.tokenizer = student_tokenizer
-        
         # Config from strategy
-        self.input_key = getattr(self.strategy.args.data, "input_key", None)
-        self.teacher_input_key = getattr(self.strategy.args.data, "teacher_input_key", None) or self.input_key
-        self.label_key = getattr(self.strategy.args.data, "label_key", None)
-        self.apply_chat_template = getattr(self.strategy.args.data, "apply_chat_template", False)
-        self.image_key = getattr(self.strategy.args.data, "image_key", None)
-        self.enable_thinking = self.strategy.args.model.enable_thinking
+        self.input_key = getattr(self.args.data, "input_key", None)
+        self.teacher_input_key = getattr(self.args.data, "teacher_input_key", None) or self.input_key
+        self.label_key = getattr(self.args.data, "label_key", None)
+        self.apply_chat_template = getattr(self.args.data, "apply_chat_template", False)
+        self.enable_thinking = getattr(self.args.model, "enable_thinking", False)
+        self.prompt_max_len = getattr(self.args.data, "prompt_max_len", 0)
+
+        self.image_key = getattr(self.args.data, "image_key", None)
+        self.same_tokenizer = self.template_identical and self.vocab_identical
+
+        # Load processor if multimodal
+        self.student_processor = get_tokenizer_or_processor(
+            self.args.model.student_name_or_path,
+            need_processor=self.image_key is not None,
+        )
+        self.teacher_processor = None
+        if self.args.model.teacher_name_or_path is not None:
+            self.teacher_processor = get_tokenizer_or_processor(
+                self.args.model.teacher_name_or_path,
+                need_processor=self.image_key is not None,
+            )
 
         # Truncate dataset if max_data_num is specified
         if max_data_num > 0 and max_data_num < len(dataset):
@@ -64,7 +75,24 @@ class PromptDataset(Dataset):
             load_from_cache_file=False,
             desc="Processing data",
         )
-        
+
+        # Filter by prompt_max_len
+        original_len = len(self.processed_dataset)
+        if self.prompt_max_len > 0:
+            strategy.log(f"Before prompt_max_len filter: {len(self.processed_dataset)}")
+            self.processed_dataset = self.processed_dataset.filter(
+                lambda x: x["prompt_len"] <= self.prompt_max_len,
+                num_proc=num_processors,
+                desc="Filtering overlang samples",
+            )
+            strategy.log(f"After prompt_max_len filter: {len(self.processed_dataset)}")
+            if len(self.processed_dataset) < original_len:
+                self.strategy.log(
+                    f"Filtered {original_len - len(self.processed_dataset)} samples "
+                    f"exceeding prompt_max_len={self.prompt_max_len} "
+                    f"({original_len} -> {len(self.processed_dataset)})"
+                )
+                
         self._print_sample()
 
     def _print_sample(self) -> None:
@@ -74,54 +102,56 @@ class PromptDataset(Dataset):
         if not self.template_identical:
             self.strategy.print(f"Sample teacher prompt:\n{self.processed_dataset[0]['tea_prompt']}")
 
-    def _build_prompt(self, data: Dict, tokenizer: Callable, input_key: str) -> str:
+    def process_data(self, data: Dict) -> Dict[str, Any]:
+        """Process a single data sample."""
+        # Build student prompt
+        stu_prompt = self._build_prompt(data, self.student_processor, self.input_key)
+        
+        # Build teacher prompt
+        if self.same_tokenizer and self.input_key == self.teacher_input_key:
+            tea_prompt = stu_prompt
+        else:
+            tea_prompt = self._build_prompt(data, self.teacher_processor, self.teacher_input_key)
+        
+        # Compute prompt token length for filtering
+        tokenizer = self.student_processor.tokenizer if hasattr(self.student_processor, "tokenizer") else self.student_processor
+        prompt_len = len(tokenizer.encode(stu_prompt))
+
+        result = {
+            "stu_prompt": stu_prompt,
+            "tea_prompt": tea_prompt,
+            "prompt": stu_prompt,
+            "prompt_len": prompt_len,
+            "label": data.get(self.label_key, "") if self.label_key else "",
+            "datasource": data.get("datasource", "default"),
+        }
+        # Load images if multimodal
+        if self.image_key:
+            result["images"] = self._load_images(data.get(self.image_key))
+        return result
+    
+    def _build_prompt(self, data: Dict, processor_or_tokenizer, input_key: str) -> str:
         """Build prompt from data with optional chat template or input template.
         
         Args:
             data: The data dict containing input
-            tokenizer: The tokenizer to use for apply_chat_template
+            processor_or_tokenizer: The processor or tokenizer to use for apply_chat_template
             input_key: The key to extract input from data
             
         Returns:
             Formatted prompt string
         """
         if self.apply_chat_template:
-            chat = convert_to_openai_messages(data[input_key])
-            return tokenizer.apply_chat_template(
+            chat = convert_to_openai_messages(data[input_key], expand_image=self.image_key is not None)
+            return processor_or_tokenizer.apply_chat_template(
                 chat,
                 tokenize=False,
                 add_generation_prompt=True,
-                enable_thinking=self.enable_thinking
+                enable_thinking=self.enable_thinking,
             )
         
         prompt = data[input_key]
         return self.input_template.format(prompt) if self.input_template else prompt
-
-    def process_data(self, data: Dict) -> Dict[str, Any]:
-        """Process a single data sample."""
-        # Build student prompt
-        stu_prompt = self._build_prompt(data, self.student_tokenizer, self.input_key)
-        
-        # Build teacher prompt
-        # Use different prompt if: different template, different input_key (self-distillation)
-        if self.template_identical and self.input_key == self.teacher_input_key:
-            tea_prompt = stu_prompt
-        else:
-            tea_prompt = self._build_prompt(data, self.teacher_tokenizer, self.teacher_input_key)
-        
-        result = {
-            "stu_prompt": stu_prompt,
-            "tea_prompt": tea_prompt,
-            "prompt": stu_prompt,
-            "label": data.get(self.label_key, "") if self.label_key else "",
-            "datasource": data.get("datasource", "default"),
-        }
-        if self.image_key:
-            image_paths = data.get(self.image_key)
-            if isinstance(image_paths, str):
-                image_paths = [image_paths]
-            result["image_paths"] = image_paths or []
-        return result
 
     def __len__(self) -> int:
         return len(self.processed_dataset)
@@ -130,7 +160,7 @@ class PromptDataset(Dataset):
         """Get item by index.
         
         Returns:
-            Dict with keys: datasource, stu_prompt, tea_prompt, label
+            Dict with keys: datasource, stu_prompt, tea_prompt, label, images (optional)
         """
         item = self.processed_dataset[idx]
         result = {
@@ -139,9 +169,28 @@ class PromptDataset(Dataset):
             "tea_prompt": item["tea_prompt"],
             "label": item["label"],
         }
-        if "image_paths" in item:
-            result["image_paths"] = item["image_paths"]
+        if "images" in item:
+            result["images"] = item["images"]
         return result
+
+    @staticmethod
+    def _load_images(image_content) -> list:
+        """Load image(s) from various input formats. Always returns a list."""
+        if image_content is None:
+            return []
+        if isinstance(image_content, Image.Image):
+            return [image_content]
+        if isinstance(image_content, str):
+            return [Image.open(image_content).convert("RGB")]
+        if isinstance(image_content, list):
+            result = []
+            for img in image_content:
+                if isinstance(img, Image.Image):
+                    result.append(img)
+                elif isinstance(img, str):
+                    result.append(Image.open(img).convert("RGB"))
+            return result
+        return []
 
     @staticmethod
     def collate_fn(batch: List[Dict[str, str]]) -> List[Dict[str, str]]:

@@ -89,10 +89,8 @@ def train(args):
     
     train_dataset = PromptDataset(
         train_data,
-        student_tokenizer,
         strategy,
         tokenizer_info=tokenizer_info,
-        teacher_tokenizer=teacher_tokenizer,
         max_data_num=args.data.max_samples,
         input_template=args.data.input_template,
         num_processors=args.data.preprocess_num_workers,
@@ -120,18 +118,16 @@ def train(args):
         eval_data = eval_data.select(range(min(args.data.max_samples, len(eval_data))))
         eval_dataset = PromptDataset(
             eval_data,
-            student_tokenizer,
             strategy,
             tokenizer_info=tokenizer_info,
-            teacher_tokenizer=teacher_tokenizer,
-            input_template=args.data.input_template
+            input_template=args.data.input_template,
         )
         eval_dataloader = strategy.setup_dataloader(
             eval_dataset, 1, True, False, collate_fn=eval_dataset.collate_fn
         )
     
     # Calculate max training steps
-    num_update_steps_per_epoch = len(train_dataset) * args.rollout.n_samples_per_prompt // args.train.train_batch_size
+    num_update_steps_per_epoch = len(train_dataset) * args.rollout.n_samples_per_prompt // args.rollout.rollout_batch_size
     max_steps = math.ceil(args.train.num_epochs * num_update_steps_per_epoch)
     strategy.print(f"Max training steps: {max_steps}")
     
@@ -154,8 +150,6 @@ def train(args):
         student_model=student_model,
         teacher_model=teacher_model,
         rollout_group=rollout_group,
-        student_tokenizer=student_tokenizer,
-        teacher_tokenizer=teacher_tokenizer,
         is_same_tokenizer=tokenizer_info.is_identical,
         train_dataloader=train_dataloader,
         eval_dataloader=eval_dataloader,

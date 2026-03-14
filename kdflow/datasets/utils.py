@@ -1,7 +1,13 @@
 import os
+from typing import List, Dict, Any
 
-from PIL import Image
+import torch
 from datasets import interleave_datasets, load_dataset, load_from_disk
+from transformers import AutoProcessor, AutoTokenizer
+
+from kdflow.utils.logging_utils import init_logger
+
+logger = init_logger(__name__)
 
 
 def exist_and_not_none(d, key):
@@ -100,6 +106,83 @@ def blending_datasets(
     return dataset
 
 
+def get_tokenizer_or_processor(model_name_or_path, model=None, padding_side="right", use_fast=True, need_processor=False):
+    if need_processor:
+        return get_processor(model_name_or_path, model, padding_side, use_fast)
+    else:
+        return get_tokenizer(model_name_or_path, model, padding_side, use_fast)
+
+
+def get_processor(model_name_or_path, model=None, padding_side="right", use_fast=True):
+    processor = AutoProcessor.from_pretrained(model_name_or_path, trust_remote_code=True, use_fast=use_fast)
+    processor.tokenizer.padding_side = padding_side
+    if processor.tokenizer.pad_token is None:
+        logger.info("Detect no pad_token in tokenizer, set it to eos_token.")
+        processor.tokenizer.pad_token = processor.tokenizer.eos_token
+        processor.tokenizer.pad_token_id = processor.tokenizer.eos_token_id
+        if model is not None:
+            model.config.text_config.pad_token_id = processor.tokenizer.pad_token_id
+
+    return processor
+
+
+def get_tokenizer(model_name_or_path, model=None, padding_side="right", use_fast=True):
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True, use_fast=use_fast)
+    tokenizer.padding_side = padding_side
+    if tokenizer.pad_token is None:
+        logger.info("Detect no pad_token in tokenizer, set it to eos_token.")
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+        if model is not None:
+            model.config.pad_token_id = tokenizer.pad_token_id
+
+    return tokenizer
+
+
+def convert_token_to_id(token, tokenizer):
+    if isinstance(token, str):
+        token = tokenizer.encode(token, add_special_tokens=False)
+        assert len(token) == 1
+        return token[0]
+    else:
+        raise ValueError("token should be int or str")
+
+
+def zero_pad_sequences(
+    sequences: List[torch.Tensor], side: str = "left", value: int = 0, stack: bool = False
+) -> torch.Tensor:
+    from torch.nn.utils.rnn import pad_sequence
+    assert side in ("left", "right")
+    sequences = [seq.squeeze(0) for seq in sequences]
+    if side == "left":
+        sequences = [seq.flip(dims=0) for seq in sequences]
+    padded_sequences = pad_sequence(
+        sequences,
+        batch_first=True,
+        padding_value=value
+    )
+    if side == "left":
+        padded_sequences = torch.flip(padded_sequences, dims=[1])
+    return padded_sequences
+
+
+def remove_pad_token(input_ids: torch.Tensor, attention_mask: torch.Tensor, return_tensors: bool = True):
+    """Remove the pad token. Return tensors and not lists.
+
+    Args:
+        input_ids shape: [bs, seq_length]
+        attention_mask shape: [bs, seq_length]
+    Returns:
+        no_padding_batch(List[Tensor[int]]): contains the rmpad token ids per query.
+    """
+    no_padding_batch = []
+    for ids, mask in zip(input_ids, attention_mask):
+        # Fix for both left and right padding
+        ids = ids[mask.bool()] if return_tensors else ids[mask.bool()].tolist()
+        no_padding_batch.append(ids)
+    return no_padding_batch
+
+
 # ShareGPT role mapping to OpenAI roles
 SHAREGPT_ROLE_MAP = {
     "human": "user",
@@ -189,14 +272,20 @@ def _convert_alpaca(data):
     return messages
 
 
-def convert_to_openai_messages(data):
+def convert_to_openai_messages(data, role="user", expand_image=False):
     """Unified converter: auto-detect data format and convert to OpenAI messages.
     
     Supported input formats:
         1. OpenAI messages (already): [{"role": "user", "content": "..."}] -> returned as-is
         2. ShareGPT: [{"from": "human", "value": "..."}] -> converted
         3. Alpaca: {"instruction": "...", "input": "...", "output": "...", ...} -> converted
-        4. Plain string: "..." -> wrapped as [{"role": "user", "content": "..."}]
+        4. Plain string: "..." -> wrapped as [{"role": role, "content": "..."}]
+    
+    Args:
+        data: Input data in any supported format.
+        role: Role to assign when data is a plain string. Defaults to "user".
+        expand_image: Whether to expand <image> placeholders into multi-part content.
+            Only set to True for multimodal (image) scenarios. Defaults to False.
     
     Returns:
         List of dicts in OpenAI messages format: [{"role": "...", "content": "..."}, ...]
@@ -205,34 +294,49 @@ def convert_to_openai_messages(data):
         raise ValueError("convert_to_openai_messages received None input.")
 
     if isinstance(data, str):
-        return [{"role": "user", "content": data}]
-
-    if isinstance(data, list):
+        messages = [{"role": role, "content": data}]
+    elif isinstance(data, list):
         if not data:
             raise ValueError("convert_to_openai_messages received an empty list.")
         if _is_openai_format(data):
-            return data
-        if _is_sharegpt_format(data):
-            return _convert_sharegpt(data)
-
-    if isinstance(data, dict):
+            messages = data
+        elif _is_sharegpt_format(data):
+            messages = _convert_sharegpt(data)
+        else:
+            raise ValueError(
+                f"Unsupported data format. Expected OpenAI messages, ShareGPT, Alpaca, or plain string. "
+                f"Got: {type(data)} with keys/content: {list(data[0].keys()) if data else data}"
+            )
+    elif isinstance(data, dict):
         if _is_alpaca_format(data):
-            return _convert_alpaca(data)
+            messages = _convert_alpaca(data)
+        else:
+            raise ValueError(
+                f"Unsupported data format. Expected OpenAI messages, ShareGPT, Alpaca, or plain string. "
+                f"Got: {type(data)} with keys/content: {data}"
+            )
+    else:
+        raise ValueError(
+            f"Unsupported data format. Expected OpenAI messages, ShareGPT, Alpaca, or plain string. "
+            f"Got: {type(data)}"
+        )
 
-    raise ValueError(
-        f"Unsupported data format. Expected OpenAI messages, ShareGPT, Alpaca, or plain string. "
-        f"Got: {type(data)} with keys/content: {data if isinstance(data, str) else list(data[0].keys()) if isinstance(data, list) and data else data}"
-    )
+    if expand_image:
+        messages = expand_image_placeholders(messages)
+    return messages
 
 
-def load_images(image_paths):
-    """Load images from paths, return list of PIL Images. Returns None if no images."""
-    if not image_paths:
-        return None
-    images = []
-    for path in image_paths:
-        if isinstance(path, str):
-            images.append(Image.open(path).convert("RGB"))
-        elif isinstance(path, Image.Image):
-            images.append(path)
-    return images if images else None
+def expand_image_placeholders(messages, placeholder="<image>"):
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, str) or placeholder not in content:
+            continue
+        parts = content.split(placeholder)
+        content_list = []
+        for i, part in enumerate(parts):
+            if part:
+                content_list.append({"type": "text", "text": part})
+            if i < len(parts) - 1:
+                content_list.append({"type": "image"})
+        msg["content"] = content_list
+    return messages

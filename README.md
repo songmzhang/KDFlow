@@ -12,6 +12,34 @@
 
 ---
 
+## 📰 News
+
+- **[2026/03]** 🎉 KDFlow v0.1.1 released! Add support for **vision-language (multimodal) models** and **Qwen3.5 series**.
+
+---
+
+## 📑 Table of Contents
+
+- [✨ Key Features](#-key-features)
+- [🚀 Quick Start](#-quick-start)
+  - [Installation](#installation)
+  - [Off-Policy Knowledge Distillation](#off-policy-knowledge-distillation)
+  - [On-Policy Knowledge Distillation](#on-policy-knowledge-distillation)
+  - [Cross-Tokenizer Off-Policy Knowledge Distillation](#cross-tokenizer-off-policy-knowledge-distillation)
+  - [Cross-Tokenizer On-Policy Knowledge Distillation](#cross-tokenizer-on-policy-knowledge-distillation)
+  - [Supervised Fine-Tuning (SFT)](#supervised-fine-tuning-sft)
+- [⚙️ Configuration Reference](#️-configuration-reference)
+- [🧩 Extending KDFlow](#-extending-kdflow)
+  - [Adding a Custom KD Algorithm](#adding-a-custom-kd-algorithm)
+  - [Adding a Custom KD Loss](#adding-a-custom-kd-loss)
+- [🔑 Design Highlights](#-design-highlights)
+- [🙏 Acknowledgement](#-acknowledgement)
+- [📖 Citation](#-citation)
+- [📄 License](#-license)
+- [⭐ Star History](#-star-history)
+
+---
+
 ## ✨ Key Features
 
 - **Decoupled Infrastructure** - Using SGLang & FSDP2 for teacher inference and student training respectively.
@@ -19,6 +47,7 @@
 - **On-Policy Knowledge Distillation** — Student-generated rollout responses are used for teacher forward and distillation training in a closed loop.
 - **Cross-Tokenizer Distillation** — Native support for distilling between models with different tokenizers (e.g., Llama → Qwen).
 - **SFT Training (Black-box KD)** — Supervised fine-tuning on collected dataset.
+- **MultiModal Support** — Support distillation with vision-language models (e.g., Qwen3-VL).
 - **Colocate Mode** — Teacher and student models **share the same GPUs** via sleep/wakeup mechanism, maximizing GPU utilization.
 - **Teacher on SGLang** — Teacher inference is powered by SGLang Engine, enabling high-throughput prefilling and flexible parallel strategies.
 - **Pluggable KD Algorithms** — Built-in support for Vanilla KD and DSKD (Dual-Space Knowledge Distillation), with easy registration of custom algorithms.
@@ -27,39 +56,9 @@
 - **Wand&b Integration** — Built-in wand&b logging for experiment tracking.
 - **High Training Efficiency** — Achieves **1.4x to 6x** faster distillation compared to mainstream knowledge distillation frameworks.
 
----
-
-## 📐 Architecture Overview
-
 <p align="center">
   <img src="figures/architecture.png" alt="KDFlow Architecture" width="80%">
 </p>
-
-### Training Modes
-
-#### Off-Policy KD
-
-```
-Data → Teacher Forward (SGLang) → Hidden States → Student Train (FSDP2)
-       [sleep/wakeup GPU sharing]
-```
-
-1. Load static SFT dataset with prompt-response pairs.
-2. Teacher performs prefilling via SGLang to extract hidden states.
-3. Hidden states are transferred to student via shared memory.
-4. Student computes KD loss using teacher's lm_head + hidden states and updates.
-
-#### On-Policy KD
-
-```
-Prompts → Rollout (SGLang) → Responses → Teacher Forward → Hidden States → Student Train
-          [weight sync from student]
-```
-
-1. Student generates responses via SGLang rollout engines.
-2. Teacher prefills the generated sequences to extract hidden states.
-3. Student trains on the on-policy data with KD loss.
-4. Student weights are synced back to rollout engines via Gloo IPC.
 
 ---
 
@@ -74,15 +73,23 @@ pip install -e ./
 ```
 
 ### Off-Policy Knowledge Distillation
-
+LLMs:
 ```bash
 bash ./examples/off_policy_kd/run_qwen3_30b_a3b_to_4b.sh
 ```
+VLMs:
+```bash
+bash ./examples/off_policy_kd/run_qwen3_vl_30b_a3b_to_4b.sh
+```
 
 ### On-Policy Knowledge Distillation
-
+LLMs:
 ```bash
 bash ./examples/on_policy_kd/run_qwen3_30b_a3b_to_4b.sh
+```
+VLMs:
+```bash
+bash ./examples/on_policy_kd/run_qwen3_vl_30b_a3b_to_4b.sh
 ```
 
 ### Cross-Tokenizer Off-Policy Knowledge Distillation

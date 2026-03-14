@@ -69,6 +69,12 @@ def init_args():
                 "[Warning] Please use --attn_implementation with flash_attention to accelerate when --packing_samples is enabled."
             )
             args.model.attn_implementation = "flash_attention_2"
+            
+        if args.data.image_key is not None:
+            print(
+                "[Warning] --packing_samples is not supported with image data. Disabling packing_samples."
+            )
+            args.data.packing_samples = False
     
     # Validate teacher parallelism settings against available GPUs
     args.kd.validate_teacher_parallelism(args.train.num_nodes, args.train.num_gpus_per_node)

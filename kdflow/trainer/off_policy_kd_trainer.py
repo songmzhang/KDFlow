@@ -27,8 +27,6 @@ class OffPolicyKDTrainer:
         strategy,
         student_model,
         teacher_model,
-        student_tokenizer: Callable,
-        teacher_tokenizer: Callable,
         train_dataloader,
         eval_dataloader=None,
         max_steps: int = None,
@@ -41,8 +39,6 @@ class OffPolicyKDTrainer:
             strategy: Training strategy containing configuration
             student_model: StudentActorGroup
             teacher_model: TeacherActorGroup
-            student_tokenizer: Student model tokenizer
-            teacher_tokenizer: Teacher model tokenizer
             train_dataloader: Training data loader
             eval_dataloader: Evaluation data loader (optional)
             max_steps: Maximum training steps
@@ -52,8 +48,6 @@ class OffPolicyKDTrainer:
         self.args = strategy.args
         self.student = student_model
         self.teacher = teacher_model
-        self.student_tokenizer = student_tokenizer
-        self.teacher_tokenizer = teacher_tokenizer
         self.train_dataloader = train_dataloader
         self.eval_dataloader = eval_dataloader
         self.max_steps = max_steps
@@ -121,9 +115,9 @@ class OffPolicyKDTrainer:
         self.start_time = time.time()
         status = defaultdict(list)
         num_micro_batches = self.args.train.train_batch_size // self.args.train.micro_train_batch_size
-        teacher_forward_n = self.args.kd.teacher_forward_n_batches
+        self.teacher_forward_n = min(self.args.kd.teacher_forward_n_batches, len(self.train_dataloader))
+        teacher_forward_n = self.teacher_forward_n
         
-        all_data = []
         for epoch in range(start_epoch, self.epochs):
             self.current_epoch = epoch
             self.train_dataloader.sampler.set_epoch(epoch)
@@ -153,6 +147,7 @@ class OffPolicyKDTrainer:
                     break
                 
                 # ===== Teacher Phase (batch N global batches) =====
+                teacher_start = time.time()
                 if self.args.kd.teacher_enable_sleep:
                     self.teacher.wakeup()
                 
@@ -166,15 +161,20 @@ class OffPolicyKDTrainer:
                     idx += len(gb)
                 if self.args.kd.teacher_enable_sleep:
                     self.teacher.sleep()
+                
+                teacher_step_fwd_time = (time.time() - teacher_start) / len(all_global_batches)
 
                 # ===== Student Phase (train N steps) =====
                 if self.args.train.train_enable_sleep:
                     self.student.wakeup()
                 for global_batch in all_global_batches:
+                    student_start = time.time()
                     self.global_step += 1
                     status_list = ray.get(self.student.async_run_distill(global_batch, status))
                     for k in status_list[0].keys():
                         self.log_state[k].append(sum(s[k] for s in status_list) / len(status_list))
+                    self.log_state["teacher_step_fwd_time"].append(teacher_step_fwd_time)
+                    self.log_state["student_step_train_time"].append((time.time() - student_start))
                     self.logging()
                 
                 if self.args.train.train_enable_sleep:
@@ -225,7 +225,7 @@ class OffPolicyKDTrainer:
                 logs = {"train/global_step": self.global_step}
                 for k in self.log_state:
                     logs[f"train/{k}"] = self.log_state[k]
-                self._wandb.log(logs) 
+                self._wandb.log(logs)
             
             for k in self.log_state:
                 self.log_state[k] = []

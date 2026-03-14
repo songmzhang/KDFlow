@@ -39,9 +39,9 @@ def process_batch_result_prefill_patched(
     """
     from sglang.srt.environ import envs
     from sglang.srt.managers.io_struct import AbortReq
-    from sglang.srt.managers.schedule_batch import RequestStage
+    # from sglang.srt.managers.schedule_batch import RequestStage
     from sglang.srt.mem_cache.common import release_kv_cache
-    from sglang.srt.tracing.trace import trace_slice
+    # from sglang.srt.tracing.trace import trace_slice
 
     skip_stream_req = None
 
@@ -84,8 +84,7 @@ def process_batch_result_prefill_patched(
                 continue
 
             if req.is_chunked <= 0:
-                if req.time_stats.prefill_finished_ts == 0.0:
-                    req.time_stats.prefill_finished_ts = time.time()
+                req.time_stats.set_prefill_finished_time()
 
                 # req output_ids are set here
                 req.output_ids.append(next_token_id)
@@ -152,12 +151,12 @@ def process_batch_result_prefill_patched(
                         self.abort_request(AbortReq(rid=req.rid))
                     req.grammar.finished = req.finished()
 
-                trace_slice(
-                    RequestStage.PREFILL_FORWARD,
-                    req.rid,
-                    auto_next_anon=not req.finished(),
-                    thread_finish_flag=req.finished(),
-                )
+                # trace_slice(
+                #     RequestStage.PREFILL_FORWARD,
+                #     req.rid,
+                #     auto_next_anon=not req.finished(),
+                #     thread_finish_flag=req.finished(),
+                # )
 
             else:
                 # being chunked reqs' prefill is not finished
@@ -187,11 +186,11 @@ def process_batch_result_prefill_patched(
                             )
                         logprob_pt += num_input_logprobs
 
-                trace_slice(
-                    RequestStage.PREFILL_CHUNKED_FORWARD,
-                    req.rid,
-                    auto_next_anon=True,
-                )
+                # trace_slice(
+                #     RequestStage.PREFILL_CHUNKED_FORWARD,
+                #     req.rid,
+                #     auto_next_anon=True,
+                # )
 
     else:  # embedding or reward model
         if result.copy_done is not None:
@@ -235,12 +234,12 @@ def process_batch_result_prefill_patched(
                 # being chunked reqs' prefill is not finished
                 req.is_chunked -= 1
 
-            trace_slice(
-                RequestStage.PREFILL_FORWARD,
-                req.rid,
-                auto_next_anon=not req.finished(),
-                thread_finish_flag=req.finished(),
-            )
+            # trace_slice(
+            #     RequestStage.PREFILL_FORWARD,
+            #     req.rid,
+            #     auto_next_anon=not req.finished(),
+            #     thread_finish_flag=req.finished(),
+            # )
 
     self.stream_output(batch.reqs, batch.return_logprob, skip_stream_req)
 

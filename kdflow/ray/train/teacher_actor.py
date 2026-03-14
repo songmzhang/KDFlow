@@ -6,7 +6,6 @@ import torch
 import numpy as np
 from transformers import AutoConfig
 
-from kdflow.datasets.utils import load_images
 from kdflow.utils.utils import remove_pad_token
 from kdflow.backend.sglang.sglang_engine import SGLangEngineService, EngineConfig
 from kdflow.utils.logging_utils import init_logger
@@ -49,7 +48,11 @@ class TeacherRayActor:
         teacher_config = AutoConfig.from_pretrained(
             strategy.args.model.teacher_name_or_path, trust_remote_code=True
         )
-        hidden_dim = teacher_config.hidden_size
+        if hasattr(teacher_config, "text_config"):  # for VLM
+            hidden_dim = teacher_config.text_config.hidden_size
+        else:
+            hidden_dim = teacher_config.hidden_size
+            
         # Each teacher actor processes: global_batch_size * forward_n_batches / dp_size samples
         batch_size = (
             strategy.args.train.train_batch_size
@@ -106,28 +109,25 @@ class TeacherRayActor:
         Returns:
             List of (batch_idx, micro-batch with teacher_hiddens) tuples and return timestamp
         """
-        # === Phase 1: Preprocessing (unpadding) ===
         batches = [global_batch[i] for i in batch_indices]
         mbsz = batches[0]["tea_input_ids"].shape[0]
-        unpadded_input_ids, unpadded_loss_mask = [], []
-        for micro_batch in batches:
-            (
-                input_ids, attn_mask, loss_mask
-            ) = (
-                micro_batch["tea_input_ids"], micro_batch["tea_attn_mask"], micro_batch["tea_loss_mask"]
-            )
-            unpadded_input_ids.extend(remove_pad_token(input_ids, attn_mask, return_tensors=False))
-            unpadded_loss_mask.extend(remove_pad_token(loss_mask, attn_mask, return_tensors=True))
-        unpadded_loss_mask = [m.numpy().astype(bool) for m in unpadded_loss_mask]
         
-        # === Phase 2: SGLang Generate ===
+        # Collect prompts and loss masks across all micro-batches
+        prompts = sum((micro_batch["tea_full_texts"] for micro_batch in batches), [])
+        unpadded_loss_masks = []
+        for micro_batch in batches:
+            attn_mask, loss_mask = micro_batch["tea_attn_mask"], micro_batch["tea_loss_mask"]
+            unpadded_loss_masks.extend(remove_pad_token(loss_mask, attn_mask, return_tensors=True))
+        unpadded_loss_masks = [m.numpy().astype(bool) for m in unpadded_loss_masks]
+        
+        # Collect image data if present
         image_data = None
-        if batches[0].get("image_paths") is not None:
-            all_image_paths = sum((micro_batch["image_paths"] for micro_batch in batches), [])
-            image_data = [load_images(paths) if paths else None for paths in all_image_paths]
+        if batches[0].get("images") is not None:
+            image_data = sum((micro_batch["images"] for micro_batch in batches), [])
+        
         hidden_states_list = self.engine_service.generate(
-            input_ids=unpadded_input_ids,
-            loss_masks=unpadded_loss_mask,
+            prompt=prompts,
+            loss_masks=unpadded_loss_masks,
             sampling_params={"max_new_tokens": 0},
             return_hidden_states=True,
             image_data=image_data,

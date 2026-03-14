@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import io
 import logging
 import multiprocessing
 import random
@@ -314,6 +316,7 @@ class RolloutActorGroup:
         from sglang_router.launch_router import RouterArgs, launch_router
 
         router_args = RouterArgs(host=host, port=port)
+        router_args.policy = "round_robin"
         if hasattr(router_args, "log_level"):
             router_args.log_level = "warn"
 
@@ -335,6 +338,20 @@ class RolloutActorGroup:
         return process
 
     @staticmethod
+    def _encode_image_to_base64(image) -> str:
+        """Convert a PIL Image to a base64-encoded string for SGLang API."""
+        from PIL import Image
+
+        if isinstance(image, str):
+            return image  # Already a base64 string or URL
+        if isinstance(image, Image.Image):
+            buffer = io.BytesIO()
+            fmt = "PNG" if image.mode == "RGBA" else "JPEG"
+            image.save(buffer, format=fmt)
+            return base64.b64encode(buffer.getvalue()).decode("utf-8")
+        raise TypeError(f"Unsupported image type: {type(image)}")
+
+    @staticmethod
     async def _async_generate(
         router_url: str,
         prompts: List[str],
@@ -354,7 +371,11 @@ class RolloutActorGroup:
                 "sampling_params": sampling_params,
             }
             if image_data and image_data[idx] is not None:
-                payload["image_data"] = image_data[idx]
+                img = image_data[idx]
+                if isinstance(img, list):
+                    payload["image_data"] = [RolloutActorGroup._encode_image_to_base64(im) for im in img]
+                else:
+                    payload["image_data"] = RolloutActorGroup._encode_image_to_base64(img)
             async with semaphore:
                 async with session.post(router_url, json=payload) as resp:
                     resp.raise_for_status()

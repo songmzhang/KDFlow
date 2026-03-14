@@ -78,11 +78,8 @@ def train(args):
     
     train_dataset = SFTDataset(
         train_data,
-        student_tokenizer,
-        args.data.max_len,
         strategy,
         tokenizer_info=tokenizer_info,
-        teacher_tokenizer=teacher_tokenizer,
         max_data_num=args.data.max_samples,
         input_template=args.data.input_template,
         num_processors=args.data.preprocess_num_workers,
@@ -110,12 +107,10 @@ def train(args):
         eval_data = eval_data.select(range(min(args.data.max_samples, len(eval_data))))
         eval_dataset = SFTDataset(
             eval_data,
-            student_tokenizer,
-            args.data.max_len,
             strategy,
             tokenizer_info=tokenizer_info,
-            teacher_tokenizer=teacher_tokenizer,
-            input_template=args.data.input_template
+            input_template=args.data.input_template,
+            num_processors=args.data.preprocess_num_workers,
         )
         eval_dataloader = strategy.setup_dataloader(
             eval_dataset, 1, True, False, collate_fn=eval_dataset.collate_fn
@@ -141,8 +136,6 @@ def train(args):
         strategy=strategy,
         student_model=student_model,
         teacher_model=teacher_model,
-        student_tokenizer=student_tokenizer,
-        teacher_tokenizer=teacher_tokenizer,
         train_dataloader=train_dataloader,
         eval_dataloader=eval_dataloader,
         max_steps=max_steps,

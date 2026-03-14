@@ -2,241 +2,172 @@ from typing import Callable, Optional, Dict, List, Any
 
 import torch
 from torch.utils.data import Dataset
+from PIL import Image
 
-from kdflow.datasets.utils import convert_to_openai_messages, load_images
-from kdflow.models.utils import TokenizerCompareResult
-from kdflow.utils.utils import zero_pad_sequences
+from kdflow.datasets.utils import convert_to_openai_messages, get_tokenizer_or_processor
 
 
 class SFTDataset(Dataset):
     """
-    Dataset for SFT model
-
+    Dataset for SFT and Off-Policy KD.
+    
     Args:
-        dataset: dataset for SFT model
-        tokenizer: tokenizer for SFT model
-        max_length: max length of input
+        dataset: dataset for SFT and Off-Policy KD
+        strategy: training strategy object
+        tokenizer_info: result of tokenizer comparison (template_identical, vocab_identical)
+        max_data_num: maximum number of data to load
+        input_template: optional template for formatting input
+        num_processors: number of processors for parallel data loading
     """
-
+    
     def __init__(
         self,
         dataset,
-        student_tokenizer: Callable,
-        max_length: int,
         strategy,
-        tokenizer_info: Optional[TokenizerCompareResult] = None,
-        teacher_tokenizer: Optional[Callable] = None,
+        tokenizer_info,
         max_data_num: int = -1,
         input_template: Optional[str] = None,
         num_processors: int = 8,
     ) -> None:
         super().__init__()
-        self.student_tokenizer = student_tokenizer
-        self.teacher_tokenizer = teacher_tokenizer
+        self.args = strategy.args
         self.strategy = strategy
-        self.max_length = max_length
-        self.tokenizer_info = tokenizer_info or TokenizerCompareResult()
+        self.max_length = self.args.data.max_len
+        self.tokenizer_info = tokenizer_info
         self.template_identical = self.tokenizer_info.template_identical
         self.vocab_identical = self.tokenizer_info.vocab_identical
 
-        # chat template
         self.input_template = input_template
-        self.input_key = getattr(self.strategy.args.data, "input_key", None)
-        self.output_key = getattr(self.strategy.args.data, "output_key", None)
-        self.apply_chat_template = getattr(self.strategy.args.data, "apply_chat_template", False)
+        self.input_key = getattr(self.args.data, "input_key", None)
+        self.teacher_input_key = getattr(self.args.data, "teacher_input_key", None) or self.input_key
+        self.output_key = getattr(self.args.data, "output_key", None)
+        self.apply_chat_template = getattr(self.args.data, "apply_chat_template", False)
+        self.enable_thinking = getattr(self.args.model, "enable_thinking", False)
 
-        # image processor
-        self.image_key = getattr(self.strategy.args.data, "image_key", None)
-        self.stu_processor = None
-        self.tea_processor = None
-        if self.image_key:
-            from transformers import AutoProcessor
-            self.stu_processor = AutoProcessor.from_pretrained(self.strategy.args.model.student_name_or_path)
-            if not self.template_identical or not self.vocab_identical:
-                self.tea_processor = AutoProcessor.from_pretrained(self.strategy.args.model.teacher_name_or_path)
-            else:
-                self.tea_processor = self.stu_processor
+        self.image_key = getattr(self.args.data, "image_key", None)
+        self.same_tokenizer = self.template_identical and self.vocab_identical
+        
+        self.student_processor = get_tokenizer_or_processor(
+            self.args.model.student_name_or_path, 
+            need_processor=self.image_key is not None,
+        )
+        self.teacher_processor = None
+        if self.args.model.teacher_name_or_path is not None:
+            self.teacher_processor = get_tokenizer_or_processor(
+                self.args.model.teacher_name_or_path,
+                need_processor=self.image_key is not None,
+            )
 
-        # Truncate dataset if max_data_num is specified
         if max_data_num > 0 and max_data_num < len(dataset):
-            strategy.log(f"Truncating dataset from {len(dataset)} to {max_data_num}")
+            self.strategy.log(f"Truncating dataset from {len(dataset)} to {max_data_num}")
             dataset = dataset.select(range(max_data_num))
 
-        # Parallel loading datasets
-        processed_dataset = dataset.map(
+        self.processed_dataset = dataset.map(
             self.process_data,
             remove_columns=dataset.column_names,
             num_proc=num_processors,
             load_from_cache_file=False,
-            desc="Processing and tokenizing data",
+            desc="Processing data",
         )
-        strategy.log(f"before filter: {len(processed_dataset)}")
-        self.processed_dataset = processed_dataset.filter(
-            lambda x: x["stu_prompt"] is not None,
-            num_proc=num_processors
+
+        original_len = len(self.processed_dataset)
+        strategy.log(f"Before length filter: {len(self.processed_dataset)}")
+        self.processed_dataset = self.processed_dataset.filter(
+            lambda x: x["stu_input_len"] <= self.max_length,
+            num_proc=num_processors,
+            desc="Filtering overlang samples",
         )
-        strategy.log(f"after filter: {len(self.processed_dataset)}")
+        if len(self.processed_dataset) < original_len:
+            self.strategy.log(
+                f"Filtered {original_len - len(self.processed_dataset)} samples "
+                f"exceeding max_length={self.max_length} "
+                f"({original_len} -> {len(self.processed_dataset)})"
+            )
+        
         self._print_sample()
 
     def _print_sample(self) -> None:
-        """Print sample data for debugging."""
-        self.strategy.print("Student input ids:")
-        self.strategy.print(self.student_tokenizer.decode(self.processed_dataset[0]["stu_input_ids"]))
-        if not self.template_identical or not self.vocab_identical:
-            self.strategy.print("Teacher input ids:")
-            self.strategy.print(self.teacher_tokenizer.decode(self.processed_dataset[0]["tea_input_ids"]))
-
-    def _tokenize_and_build(
-        self, 
-        prompt_str: str, 
-        resp_str: str, 
-        tokenizer: Callable, 
-        prefix: str,
-        images: Optional[List] = None,
-        processor=None,
-    ) -> Dict[str, Any]:
-        """Tokenize prompt and response, build result dict."""
-        if images and processor:
-            # Tokenize prompt and full text separately to compute loss_mask
-            prompt_inputs = processor(text=prompt_str, images=images, return_tensors="pt", padding=False)
-            prompt_len = prompt_inputs["input_ids"].squeeze().shape[0]
-            
-            if not resp_str.endswith(tokenizer.eos_token):
-                resp_str += " " + tokenizer.eos_token
-            full_text = prompt_str + resp_str
-            full_inputs = processor(text=full_text, images=images, return_tensors="pt", padding=False)
-            full_len = full_inputs["input_ids"].squeeze().shape[0]
-            
-            result = {
-                f"{prefix}_prompt": prompt_str,
-                f"{prefix}_response": resp_str,
-                f"{prefix}_input_ids": full_inputs["input_ids"].squeeze().tolist(),
-                f"{prefix}_attn_mask": full_inputs["attention_mask"].squeeze().tolist(),
-                f"{prefix}_loss_mask": [False] * prompt_len + [True] * (full_len - prompt_len),
-            }
-            # Store multimodal tensors (pixel_values, image_grid_thw, etc.)
-            for key in full_inputs:
-                if key not in ("input_ids", "attention_mask"):
-                    result[f"{prefix}_{key}"] = full_inputs[key].squeeze().tolist()
-            return result
-        else:
-            prompt = tokenizer(prompt_str, add_special_tokens=False)
-            prompt_len = len(prompt["input_ids"])
-        
-            if not resp_str.endswith(tokenizer.eos_token):
-                resp_str += " " + tokenizer.eos_token
-            resp = tokenizer(resp_str, add_special_tokens=False)
-            
-            return {
-                f"{prefix}_prompt": prompt_str,
-                f"{prefix}_response": resp_str,
-                f"{prefix}_input_ids": prompt["input_ids"] + resp["input_ids"],
-                f"{prefix}_attn_mask": prompt["attention_mask"] + resp["attention_mask"],
-                f"{prefix}_loss_mask": [False] * prompt_len + [True] * len(resp["input_ids"]),
-            }
-
-    def _empty_result(self) -> Dict[str, Any]:
-        """Return an empty result dict for filtering."""
-        result = {
-            "stu_prompt": None, "stu_response": None,
-            "stu_input_ids": [], "stu_attn_mask": [], "stu_loss_mask": [],
-            "tea_prompt": None, "tea_response": None,
-            "tea_input_ids": [], "tea_attn_mask": [], "tea_loss_mask": [],
-        }
-        if self.image_key:
-            result["image_paths"] = []
-        return result
+        sample = self.processed_dataset[0]
+        self.strategy.print("Student prompt + response:")
+        self.strategy.print(sample["stu_prompt"] + sample["stu_response"])
+        if not self.same_tokenizer:
+            self.strategy.print("Teacher prompt + response:")
+            self.strategy.print(sample["tea_prompt"] + sample["tea_response"])
 
     def process_data(self, data: Dict) -> Dict[str, Any]:
-        """Process a single data sample."""
-        enable_thinking = self.strategy.args.model.enable_thinking
-        
-        # Skip samples with None input
-        input_data = data.get(self.input_key)
-        if input_data is None:
-            return self._empty_result()
-
-        # Load images if image_key is specified
-        images = None
-        if self.image_key:
-            image_paths = data.get(self.image_key)
-            if image_paths:
-                if isinstance(image_paths, str):
-                    image_paths = [image_paths]
-                images = load_images(image_paths)
-
-        # Process student data
-        stu_prompt_str, stu_resp_str = self.preprocess_data(
-            data,
-            self.input_template,
-            self.input_key,
-            self.output_key,
-            apply_chat_template=self.student_tokenizer.apply_chat_template,
-            enable_thinking=enable_thinking
+        stu_chat_template_fn = self.student_processor.apply_chat_template
+        stu_prompt, stu_response = self.preprocess_data(
+            data, self.input_template, self.input_key, self.output_key,
+            apply_chat_template=stu_chat_template_fn,
         )
-        result = self._tokenize_and_build(stu_prompt_str, stu_resp_str, self.student_tokenizer, "stu", images=images, processor=self.stu_processor)
-        
-        # Filter by max_length
-        if len(result["stu_input_ids"]) > self.max_length:
-            return self._empty_result()
-        
-        if self.image_key:
-            image_paths = data.get(self.image_key)
-            if isinstance(image_paths, str):
-                image_paths = [image_paths]
-            result["image_paths"] = image_paths or []
+        stu_eos_token = self.get_eos_token(self.student_processor)
+        if not stu_response.endswith(stu_eos_token):
+            stu_response += " " + stu_eos_token
 
-        # Process teacher data if needed
-        if not self.template_identical or not self.vocab_identical:
-            assert self.teacher_tokenizer is not None, "teacher_tokenizer cannot be None."
-            tea_prompt_str, tea_resp_str = self.preprocess_data(
-                data,
-                self.input_template,
-                self.input_key,
-                self.output_key,
-                apply_chat_template=self.teacher_tokenizer.apply_chat_template,
-                enable_thinking=enable_thinking
-            )
-            result.update(self._tokenize_and_build(tea_prompt_str, tea_resp_str, self.teacher_tokenizer, "tea", images=images, processor=self.tea_processor))
-        else:
-            result["tea_prompt"] = result["stu_prompt"]
-            result["tea_response"] = result["stu_response"]
-            result["tea_input_ids"] = result["stu_input_ids"]
-            result["tea_attn_mask"] = result["stu_attn_mask"]
-            result["tea_loss_mask"] = result["stu_loss_mask"]
-        
+        result = {"stu_prompt": stu_prompt, "stu_response": stu_response}
+        result["stu_resp_len"] = self._compute_token_length(
+            self.student_processor, stu_response
+        )
+        result["stu_input_len"] = self._compute_token_length(
+            self.student_processor, stu_prompt
+        ) + result["stu_resp_len"]
+
+        if self.image_key is not None:
+            result["images"] = self.load_images(data[self.image_key])
+
+        if self.args.model.teacher_name_or_path is not None:
+            if not self.same_tokenizer:
+                tea_chat_template_fn = self.teacher_processor.apply_chat_template
+                tea_prompt, tea_response = self.preprocess_data(
+                    data, self.input_template, self.teacher_input_key, self.output_key,
+                    apply_chat_template=tea_chat_template_fn,
+                )
+                tea_eos_token = self.get_eos_token(self.teacher_processor)
+                if not tea_response.endswith(tea_eos_token):
+                    tea_response += " " + tea_eos_token
+                result["tea_prompt"] = tea_prompt
+                result["tea_response"] = tea_response
+                result["tea_resp_len"] = self._compute_token_length(
+                    self.teacher_processor, tea_response
+                )
+            else:
+                result["tea_prompt"] = stu_prompt
+                result["tea_response"] = stu_response
+                result["tea_resp_len"] = result["stu_resp_len"]
+
         return result
     
+    def get_eos_token(self, processor):
+        return processor.tokenizer.eos_token if hasattr(processor, "tokenizer") else processor.eos_token
+
     def preprocess_data(
         self,
-        data: Dict, 
-        input_template: Optional[str] = None, 
-        input_key: str = "input", 
-        output_key: Optional[str] = None, 
-        apply_chat_template: Optional[Callable] = None, 
-        enable_thinking: Optional[bool] = None
+        data: Dict,
+        input_template: Optional[str] = None,
+        input_key: str = "input",
+        output_key: Optional[str] = None,
+        apply_chat_template: Optional[Callable] = None,
     ) -> tuple:
-        """Preprocess data to extract prompt and response."""
         if not apply_chat_template:
             prompt = data[input_key]
             if input_template:
                 prompt = input_template.format(prompt)
-            assert output_key is not None, "output_key cannot be None."
+            assert output_key is not None
             return prompt, data[output_key]
-        
-        # Apply chat template
+
+        has_image = self.image_key is not None
         if output_key:
-            prompt_msg = convert_to_openai_messages(data[input_key])
-            resp_msg = convert_to_openai_messages(data[output_key])
-            # Ensure resp_msg only contains assistant turns
-            prompt = apply_chat_template(prompt_msg, tokenize=False, add_generation_prompt=True, enable_thinking=enable_thinking)
-            full_text = apply_chat_template(prompt_msg + resp_msg, tokenize=False, enable_thinking=enable_thinking)
+            messages = convert_to_openai_messages(data[input_key], expand_image=has_image) + \
+                convert_to_openai_messages(data[output_key], role="assistant", expand_image=has_image)
         else:
-            messages = convert_to_openai_messages(data[input_key])
-            prompt = apply_chat_template(messages[:-1], tokenize=False, add_generation_prompt=True, enable_thinking=enable_thinking)
-            full_text = apply_chat_template(messages, tokenize=False, enable_thinking=enable_thinking)
-        
-        response = full_text[len(prompt):].lstrip("<think>\n\n</think>\n\n").rstrip()
+            messages = convert_to_openai_messages(data[input_key], expand_image=has_image)
+
+        prompt = apply_chat_template(
+            messages[:-1], tokenize=False, add_generation_prompt=True,
+            enable_thinking=self.enable_thinking,
+        )
+        full_text = apply_chat_template(messages, tokenize=False, enable_thinking=self.enable_thinking)
+        response = full_text[len(prompt):].rstrip()
         return prompt, response
 
     def __len__(self) -> int:
@@ -245,40 +176,80 @@ class SFTDataset(Dataset):
     def __getitem__(self, idx: int) -> Dict:
         return self.processed_dataset[idx]
 
-    def _pad_sequence(self, items: List[Dict], key: str, pad_value: int = 0) -> torch.Tensor:
-        """Helper to pad sequences."""
-        return zero_pad_sequences(
-            [torch.LongTensor(item[key]) for item in items],
-            "right", pad_value
-        )
+    def load_images(self, image_content):
+        """Load image(s) from various input formats. Always returns a list."""
+        if isinstance(image_content, Image.Image):
+            return [image_content]
+        if isinstance(image_content, str):
+            return [Image.open(image_content).convert("RGB")]
+        if isinstance(image_content, list):
+            return [self._load_single_image(img) for img in image_content]
+        return []
+
+    @staticmethod
+    def _load_single_image(img):
+        if isinstance(img, Image.Image):
+            return img
+        if isinstance(img, str):
+            return Image.open(img).convert("RGB")
+        return None
+
+    def _compute_token_length(self, processor, text):
+        tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else processor
+        return len(tokenizer.encode(text, add_special_tokens=False))
+
+    def _encode_batch(self, processor, full_texts, images=None):
+        kwargs = {"text": full_texts, "padding": "longest", "truncation": False,
+                  "max_length": self.max_length, "return_tensors": "pt"}
+        if images is not None:
+            kwargs["images"] = images
+        return processor(**kwargs)
+
+    @staticmethod
+    def _build_loss_mask(attn_mask, resp_lens):
+        bs, seq_len = attn_mask.shape
+        loss_mask = torch.zeros(bs, seq_len, dtype=torch.bool)
+        for i in range(bs):
+            real_end = attn_mask[i].sum().item()
+            start = max(real_end - resp_lens[i] - 1, 0)
+            loss_mask[i, start:real_end - 1] = True
+        return loss_mask
 
     def collate_fn(self, item_list: List[Dict]) -> Dict[str, torch.Tensor]:
-        """Collate function for DataLoader."""
-        batch = {
-            # "stu_prompts": [item["stu_prompt"] for item in item_list],
-            "stu_input_ids": self._pad_sequence(item_list, "stu_input_ids", self.student_tokenizer.pad_token_id),
-            "stu_attn_mask": self._pad_sequence(item_list, "stu_attn_mask"),
-            "stu_loss_mask": self._pad_sequence(item_list, "stu_loss_mask", False).roll(shifts=-1, dims=1),
-        }
-        
-        if item_list[0].get("tea_input_ids") is not None:
-            tea_pad_id = self.teacher_tokenizer.pad_token_id if self.teacher_tokenizer else self.student_tokenizer.pad_token_id
-            batch.update({
-                "tea_input_ids": self._pad_sequence(item_list, "tea_input_ids", tea_pad_id),
-                "tea_attn_mask": self._pad_sequence(item_list, "tea_attn_mask"),
-                "tea_loss_mask": self._pad_sequence(item_list, "tea_loss_mask", False).roll(shifts=-1, dims=1),
-            })
-        
-        # Collate multimodal data (pixel_values, image_grid_thw, etc.)
-        mm_keys = [k for k in item_list[0].keys() if k.startswith("stu_") and k not in (
-            "stu_prompt", "stu_response", "stu_input_ids", "stu_attn_mask", "stu_loss_mask"
-        )]
-        for key in mm_keys:
-            items_with_key = [item for item in item_list if key in item and item[key]]
-            if items_with_key:
-                batch[key] = torch.cat([torch.tensor(item[key]) for item in items_with_key])
+        stu_full = [item["stu_prompt"] + item["stu_response"] for item in item_list]
+        images = [item["images"] for item in item_list] if self.image_key else None
 
-        if "image_paths" in item_list[0]:
-            batch["image_paths"] = [item["image_paths"] for item in item_list]
-            
+        stu_enc = self._encode_batch(self.student_processor, stu_full, images)
+
+        batch = {f"mm_{k}": v for k, v in stu_enc.items() if k not in ("input_ids", "attention_mask")}
+        batch["stu_input_ids"] = stu_enc["input_ids"]
+        batch["stu_attn_mask"] = stu_enc["attention_mask"]
+        batch["stu_loss_mask"] = self._build_loss_mask(
+            stu_enc["attention_mask"],
+            [item["stu_resp_len"] for item in item_list],
+        )
+
+        if "tea_prompt" in item_list[0]:
+            if not self.same_tokenizer:
+                tea_full = [item["tea_prompt"] + item["tea_response"] for item in item_list]
+                tea_enc = self._encode_batch(self.teacher_processor, tea_full, images)
+                batch["tea_input_ids"] = tea_enc["input_ids"]
+                batch["tea_attn_mask"] = tea_enc["attention_mask"]
+                batch["tea_loss_mask"] = self._build_loss_mask(
+                    tea_enc["attention_mask"],
+                    [item["tea_resp_len"] for item in item_list],
+                )
+            else:
+                batch["tea_input_ids"] = batch["stu_input_ids"]
+                batch["tea_attn_mask"] = batch["stu_attn_mask"]
+                batch["tea_loss_mask"] = batch["stu_loss_mask"]
+
+        if images is not None:
+            batch["images"] = images
+
+        if "tea_prompt" in item_list[0]:
+            batch["tea_full_texts"] = [
+                item["tea_prompt"] + item["tea_response"] for item in item_list
+            ]
+
         return batch

@@ -139,7 +139,7 @@ def _handle_generate(engine, request, shm_pool, shm_pool_name,
     """Handle a generate request: run inference and write hidden states to shared memory."""
     kwargs = request["kwargs"]
     generate_kwargs = {
-        "input_ids": kwargs["input_ids"],
+        "prompt": kwargs["prompt"],
         "sampling_params": kwargs["sampling_params"],
         "return_hidden_states": kwargs.get("return_hidden_states", True),
     }
@@ -152,6 +152,7 @@ def _handle_generate(engine, request, shm_pool, shm_pool_name,
 
     for output, mask in zip(outputs, kwargs["loss_masks"]):
         hs_np = output["meta_info"]["hidden_states"][0]
+        hs_np = hs_np[:mask.shape[0]]  # loss_mask may have been truncated
         hs_np = hs_np[mask]
         if not hs_np.flags['C_CONTIGUOUS']:
             hs_np = np.ascontiguousarray(hs_np)
@@ -246,18 +247,26 @@ class SGLangEngineService:
 
     def generate(
         self,
-        input_ids: List[List[int]],
+        prompt: List[str],
         loss_masks: List[np.ndarray],
         sampling_params: Dict[str, Any],
         return_hidden_states: bool = True,
         image_data=None,
     ) -> List[np.ndarray]:
-        """Run generation and return hidden states via shared memory."""
+        """Run generation and return hidden states via shared memory.
+        
+        Args:
+            prompt: List of raw text prompts. SGLang handles tokenization internally.
+            loss_masks: Pre-computed boolean masks for selecting response hidden states.
+            sampling_params: Sampling parameters (e.g. max_new_tokens=0 for prefill-only).
+            return_hidden_states: Whether to return hidden states.
+            image_data: Optional list of image data for multimodal models.
+        """
         if not self._started:
             raise RuntimeError("Service not started")
 
         kwargs = {
-            "input_ids": input_ids,
+            "prompt": prompt,
             "loss_masks": loss_masks,
             "sampling_params": sampling_params,
             "return_hidden_states": return_hidden_states,

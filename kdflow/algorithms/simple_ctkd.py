@@ -86,8 +86,7 @@ class SimpleCrossTokenizerKD:
 
         assert teacher_hiddens is not None, "micro_batch must contain `teacher_hiddens` for KD"
 
-        _skip = {"stu_input_ids", "stu_attn_mask", "stu_loss_mask", "tea_input_ids", "tea_attn_mask", "tea_loss_mask", "teacher_hiddens", "avg_micro_batch_token_num"}
-        mm_kwargs = {k[4:]: v for k, v in micro_batch.items() if k.startswith("stu_") and k not in _skip}
+        mm_kwargs = {k[3:]: v for k, v in micro_batch.items() if k.startswith("mm_")}
 
         output = self.student(
             student_input_ids,

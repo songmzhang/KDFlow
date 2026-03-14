@@ -18,8 +18,7 @@ class SFT:
         student_loss_mask = micro_batch["stu_loss_mask"].bool()
         avg_token_num = micro_batch["avg_micro_batch_token_num"]
 
-        _skip = {"stu_input_ids", "stu_attn_mask", "stu_loss_mask", "tea_input_ids", "tea_attn_mask", "tea_loss_mask", "teacher_hiddens", "avg_micro_batch_token_num"}
-        mm_kwargs = {k[4:]: v for k, v in micro_batch.items() if k.startswith("stu_") and k not in _skip}
+        mm_kwargs = {k[3:]: v for k, v in micro_batch.items() if k.startswith("mm_")}
 
         output = self.student(
             student_input_ids,
@@ -34,7 +33,7 @@ class SFT:
         loss_info = {}
         V = student_logits.shape[-1]
         student_label_ids = student_input_ids.roll(shifts=-1, dims=1)[student_loss_mask]
-        ce_loss = compute_cross_entropy(student_logits, student_label_ids, reduction="sum").sum() / avg_token_num
+        ce_loss = compute_cross_entropy(student_logits, student_label_ids, reduction="sum") / avg_token_num
         loss = ce_loss
         loss_info["loss"] = loss
         loss_info["ce_loss"] = ce_loss
