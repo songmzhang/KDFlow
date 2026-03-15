@@ -31,7 +31,7 @@ class StudentActorGroup:
         args,
         num_nodes,
         num_gpus_per_node,
-        pg: PlacementGroup = None,
+        pg=None,
         num_gpus_per_actor=1,
         resources: Dict[str, float] = None,
         num_resources_per_node: int = None,
@@ -44,10 +44,21 @@ class StudentActorGroup:
         self._resources = resources
         self._num_resources_per_node = num_resources_per_node
 
-        self._initiate_actors(pg, num_gpus_per_actor)
+        # Parse PG info (same pattern as RolloutActorGroup / TeacherActorGroup)
+        if pg is not None and isinstance(pg, tuple):
+            self._pg, self._reordered_bundle_indices = pg
+        elif pg is not None:
+            self._pg = pg
+            self._reordered_bundle_indices = None
+        else:
+            self._pg = None
+            self._reordered_bundle_indices = None
 
-    def _initiate_actors(self, pg, num_gpus_per_actor):
+        self._initiate_actors(num_gpus_per_actor)
+
+    def _initiate_actors(self, num_gpus_per_actor):
         world_size = self._num_nodes * self._num_gpus_per_node
+        pg = self._pg
 
         # Use placement group to lock resources for models of same type
         if self._num_gpus_per_node > 1 and pg is None:
@@ -59,13 +70,20 @@ class StudentActorGroup:
 
             pg = placement_group(bundles, strategy="PACK")
             ray.get(pg.ready())
+
+        def _get_bundle_index(rank):
+            """Map logical rank to actual PG bundle index using reordered_bundle_indices."""
+            if self._reordered_bundle_indices is not None:
+                return self._reordered_bundle_indices[rank]
+            return rank
+
         if pg:
             master_actor = StudentRayActor.options(
                 num_cpus=num_gpus_per_actor,
                 num_gpus=num_gpus_per_actor,
                 resources=self._resources,
                 scheduling_strategy=PlacementGroupSchedulingStrategy(
-                    placement_group=pg, placement_group_bundle_index=0
+                    placement_group=pg, placement_group_bundle_index=_get_bundle_index(0)
                 ),
             ).remote(world_size, 0, None, None)
         else:
@@ -87,7 +105,7 @@ class StudentActorGroup:
                         resources=self._resources,
                         scheduling_strategy=PlacementGroupSchedulingStrategy(
                             placement_group=pg,
-                            placement_group_bundle_index=rank,
+                            placement_group_bundle_index=_get_bundle_index(rank),
                         ),
                     ).remote(world_size, rank, master_addr, master_port)
                 else:

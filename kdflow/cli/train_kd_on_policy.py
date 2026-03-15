@@ -58,7 +58,7 @@ def train(args):
         args,
         args.train.num_nodes,
         args.train.num_gpus_per_node,
-        pg=pg,
+        pg=(pg, reordered_bundle_indices),
         num_gpus_per_actor=0.5,
     )
     
