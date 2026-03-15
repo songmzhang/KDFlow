@@ -330,14 +330,16 @@ class OnPolicyKDTrainer:
             prompt_input["images"] = images
         prompt_tok = processor(**prompt_input, return_tensors="pt", add_special_tokens=False)
         prompt_len = prompt_tok["input_ids"].shape[1]
-        resp_tok = processor(text=response, return_tensors="pt", add_special_tokens=False)
+        
+        full_input = {"text": prompt + response}
+        if images:
+            full_input["images"] = images
+        # concat before tokenize to avoid tokenization mismatch between trainer and teacher
+        full_tok = processor(**full_input, return_tensors="pt", add_special_tokens=False)
+        resp_len = full_tok["input_ids"].shape[1] - prompt_len
 
-        resp_ids = resp_tok["input_ids"][0]
-        resp_mask = resp_tok["attention_mask"][0]
-        resp_len = resp_ids.shape[0]
-
-        input_ids = torch.cat((prompt_tok["input_ids"][0], resp_ids), dim=0)
-        attn_mask = torch.cat((prompt_tok["attention_mask"][0], resp_mask), dim=0)
+        input_ids = full_tok["input_ids"][0]
+        attn_mask = full_tok["attention_mask"][0]
         loss_mask = torch.tensor([False] * prompt_len + [True] * resp_len).roll(shifts=-1)
 
         result = {
