@@ -111,7 +111,9 @@ class SimpleCrossTokenizerKD:
         
         aligned_student_logits = student_logits[student_aligned_idx][:, self.student_overlap_token_ids]
         aligned_teacher_logits = teacher_logits[teacher_aligned_idx][:, self.teacher_overlap_token_ids]
-        assert aligned_teacher_logits.shape == aligned_student_logits.shape
+        assert aligned_teacher_logits.shape == aligned_student_logits.shape, \
+            "teacher_logits must have the same shape with student_logits, " \
+            f"but got teacher: {aligned_teacher_logits.shape} and student: {aligned_student_logits.shape}."
         
         align_ratio = torch.tensor(len(student_aligned_idx) / len(student_label_ids))
         

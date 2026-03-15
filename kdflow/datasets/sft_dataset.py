@@ -167,7 +167,7 @@ class SFTDataset(Dataset):
             enable_thinking=self.enable_thinking,
         )
         full_text = apply_chat_template(messages, tokenize=False, enable_thinking=self.enable_thinking)
-        response = full_text[len(prompt):].rstrip()
+        response = full_text[len(prompt):].removeprefix("<think>\n\n</think>\n\n").rstrip()
         return prompt, response
 
     def __len__(self) -> int:
