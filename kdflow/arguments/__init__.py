@@ -83,6 +83,13 @@ def init_args():
                 "[Warning] rollout_num_engines * rollout_tp_size is less than total GPUs. "
                 f"Automatically increase rollout_num_engines to {args.rollout.rollout_num_engines}."
             )
+            
+        if args.data.max_len < args.data.prompt_max_len + args.rollout.generate_max_len:
+            args.data.max_len = args.data.prompt_max_len + args.rollout.generate_max_len
+            print(
+                "[Warning] --max_len is smaller than --prompt_max_len + --generate_max_len.",
+                f"Automatically increase --max_len to {args.data.max_len}.",
+            )
     
     # Validate teacher parallelism settings against available GPUs
     args.kd.validate_teacher_parallelism(args.train.num_nodes, args.train.num_gpus_per_node)

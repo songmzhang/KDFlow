@@ -55,7 +55,7 @@ class DataArguments:
         metadata={"help": "Use HF tokenizer chat template."}
     )
     max_len: int = field(
-        default=None
+        default=4096
     )
     max_samples: int = field(
         default=1e8
