@@ -108,17 +108,61 @@ class RolloutRayActor:
     def _register_with_router(self):
         """Register this server with the SGLang router."""
         worker_url = f"http://{self.server_host}:{self.server_port}"
+        logger.info(
+            f"[RolloutActor {self.rank}] Attempting to register with router at "
+            f"http://{self.router_ip}:{self.router_port}, worker_url={worker_url}"
+        )
+
+        # Step 1: Check if router is reachable before registering
+        try:
+            health_resp = requests.get(
+                f"http://{self.router_ip}:{self.router_port}/health", timeout=5
+            )
+            logger.info(
+                f"[RolloutActor {self.rank}] Router health check: status={health_resp.status_code}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"[RolloutActor {self.rank}] Router health check failed before registration: {e}"
+            )
+
+        # Step 2: Register with router
         try:
             response = requests.post(
                 f"http://{self.router_ip}:{self.router_port}/workers",
                 json={"url": worker_url, "worker_type": "regular"},
             )
+            logger.info(
+                f"[RolloutActor {self.rank}] Registration via /workers: "
+                f"status={response.status_code}, body={response.text}"
+            )
             response.raise_for_status()
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"[RolloutActor {self.rank}] /workers API failed ({e}), trying /add_worker fallback"
+            )
             response = requests.post(
                 f"http://{self.router_ip}:{self.router_port}/add_worker?url={worker_url}"
             )
+            logger.info(
+                f"[RolloutActor {self.rank}] Registration via /add_worker: "
+                f"status={response.status_code}, body={response.text}"
+            )
             response.raise_for_status()
+
+        # Step 3: Verify registration by querying current worker list
+        try:
+            workers_resp = requests.get(
+                f"http://{self.router_ip}:{self.router_port}/workers", timeout=5
+            )
+            logger.info(
+                f"[RolloutActor {self.rank}] Post-registration worker list: "
+                f"status={workers_resp.status_code}, body={workers_resp.text}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"[RolloutActor {self.rank}] Failed to query worker list after registration: {e}"
+            )
 
     def _make_request(self, endpoint: str, payload: Optional[dict] = None, method: str = "POST"):
         """Make an HTTP request to the local SGLang server."""

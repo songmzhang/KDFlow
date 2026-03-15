@@ -225,9 +225,6 @@ class OnPolicyKDTrainer:
         if self.args.rollout.rollout_enable_sleep:
             self.rollout_group.wakeup()
 
-        max_response_length = kwargs.get("max_new_tokens", 1024)
-        truncate_length = min(self.args.data.prompt_max_len + max_response_length, self.args.data.max_len)
-
         # Extract prompts and labels from batch
         all_stu_prompts = [item["stu_prompt"] for item in prompt_batch]
         all_tea_prompts = [item["tea_prompt"] for item in prompt_batch]
@@ -251,8 +248,6 @@ class OnPolicyKDTrainer:
                 tea_prompt=all_tea_prompts[i],
                 output=all_outputs[i],
                 label=all_labels[i],
-                max_response_length=max_response_length,
-                truncate_length=truncate_length,
                 images=all_images[i] if all_images and all_images[i] else None,
             )
             for i in range(len(all_outputs))
@@ -311,7 +306,6 @@ class OnPolicyKDTrainer:
         response: str, 
         processor,
         prefix: str,
-        truncate_length: int,
         images=None,
     ) -> Dict[str, Any]:
         """Tokenize prompt + response for a single sample.
@@ -321,7 +315,6 @@ class OnPolicyKDTrainer:
             response: Response string.
             processor: Processor or tokenizer for the model.
             prefix: 'stu' or 'tea'.
-            truncate_length: Max sequence length.
             images: PIL images (or None for text-only).
 
         Returns:
@@ -338,16 +331,14 @@ class OnPolicyKDTrainer:
         prompt_tok = processor(**prompt_input, return_tensors="pt", add_special_tokens=False)
         prompt_len = prompt_tok["input_ids"].shape[1]
         resp_tok = processor(text=response, return_tensors="pt", add_special_tokens=False)
-        resp_len = resp_tok["input_ids"].shape[1]
-        
-        if images:
-            image_token_id = processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
-            image_token_num = prompt_tok["input_ids"].eq(image_token_id).sum().item()
-            truncate_length = truncate_length + image_token_num
-        
-        input_ids = torch.cat((prompt_tok["input_ids"], resp_tok["input_ids"]), dim=1)[0, :truncate_length]
-        attn_mask = torch.cat((prompt_tok["attention_mask"], resp_tok["attention_mask"]), dim=1)[0, :truncate_length]
-        loss_mask = torch.tensor(([False] * prompt_len + [True] * resp_len)[:truncate_length]).roll(shifts=-1)
+
+        resp_ids = resp_tok["input_ids"][0]
+        resp_mask = resp_tok["attention_mask"][0]
+        resp_len = resp_ids.shape[0]
+
+        input_ids = torch.cat((prompt_tok["input_ids"][0], resp_ids), dim=0)
+        attn_mask = torch.cat((prompt_tok["attention_mask"][0], resp_mask), dim=0)
+        loss_mask = torch.tensor([False] * prompt_len + [True] * resp_len).roll(shifts=-1)
 
         result = {
             f"{prefix}_input_ids": input_ids,
@@ -368,8 +359,6 @@ class OnPolicyKDTrainer:
         tea_prompt: str,
         output,
         label: str,
-        max_response_length: int,
-        truncate_length: int,
         images=None,
     ) -> Dict[str, Any]:
         """
@@ -380,8 +369,6 @@ class OnPolicyKDTrainer:
             tea_prompt: Teacher prompt string (formatted with teacher's chat template)
             output: rollout output object
             label: Label string
-            max_response_length: Maximum response length
-            truncate_length: Max sequence length.
             images: PIL images (or None for text-only).
             
         Returns:
@@ -392,12 +379,12 @@ class OnPolicyKDTrainer:
         response_text = output["text"]
         
         stu_tokens = self._tokenize_sample(
-            stu_prompt, response_text, self.student_processor, "stu", truncate_length, images=images
+            stu_prompt, response_text, self.student_processor, "stu", images=images
         )
         
         if not self.is_same_tokenizer or tea_prompt != stu_prompt:
             tea_tokens = self._tokenize_sample(
-                tea_prompt, response_text, self.teacher_processor, "tea", truncate_length, images=images
+                tea_prompt, response_text, self.teacher_processor, "tea", images=images
             )
         else:
             # Same tokenizer: reuse student tensors (mm_ fields already in stu_tokens)
@@ -428,7 +415,6 @@ class OnPolicyKDTrainer:
             "labels": [label],
             "response_length": torch.FloatTensor([[response_length]]),
             "total_length": torch.FloatTensor([[total_length]]),
-            "response_clip_ratio": torch.FloatTensor([[float(response_length >= max_response_length)]]),
         }
         if images:
             sample["images"] = [images]

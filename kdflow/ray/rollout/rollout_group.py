@@ -334,7 +334,21 @@ class RolloutActorGroup:
         if not process.is_alive():
             raise RuntimeError("SGLang router process died during startup")
 
-        logger.info(f"SGLang router launched successfully at {host}:{port}")
+        # Verify router is actually reachable after sleep
+        router_reachable = False
+        try:
+            resp = requests.get(f"http://{host}:{port}/health", timeout=5)
+            router_reachable = resp.status_code == 200
+            logger.info(
+                f"SGLang router health check after startup: "
+                f"status={resp.status_code}, reachable={router_reachable}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"SGLang router NOT reachable after 3s sleep: {e}"
+            )
+
+        logger.info(f"SGLang router launched at {host}:{port}, reachable={router_reachable}")
         return process
 
     @staticmethod
