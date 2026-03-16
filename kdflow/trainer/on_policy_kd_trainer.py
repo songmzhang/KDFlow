@@ -30,8 +30,8 @@ class OnPolicyKDTrainer:
         is_same_tokenizer: bool,
         train_dataloader,
         eval_dataloader=None,
-        max_steps: int = None,
-        num_update_steps_per_epoch: int = None,
+        max_rollout_iters: int = None,
+        num_rollout_iters_per_epoch: int = None,
         generate_kwargs: Dict[str, float] = None,
     ) -> None:
         """
@@ -45,8 +45,8 @@ class OnPolicyKDTrainer:
             is_same_tokenizer: Whether student and teacher use same tokenizer
             train_dataloader: Training data loader
             eval_dataloader: Evaluation data loader (optional)
-            max_steps: Maximum training steps
-            num_update_steps_per_epoch: Number of update steps per epoch
+            max_rollout_iters: Maximum rollout iterations in training
+            num_rollout_iters_per_epoch: Number of rollout iterations per epoch
         """
         self.strategy = strategy
         self.args = strategy.args
@@ -56,8 +56,8 @@ class OnPolicyKDTrainer:
         self.is_same_tokenizer = is_same_tokenizer
         self.train_dataloader = train_dataloader
         self.eval_dataloader = eval_dataloader
-        self.max_steps = max_steps
-        self.num_update_steps_per_epoch = num_update_steps_per_epoch
+        self.max_rollout_iters = max_rollout_iters
+        self.num_rollout_iters_per_epoch = num_rollout_iters_per_epoch
         self.generate_kwargs = generate_kwargs
         self.epochs = self.args.train.num_epochs
         
@@ -111,13 +111,13 @@ class OnPolicyKDTrainer:
     
     def _print_training_config(self) -> None:
         """Log training configuration before training starts."""
-        total_steps = self.max_steps
+        total_steps = self.max_rollout_iters
         grad_accum = self.args.train.train_batch_size * self.args.model.ring_attn_size \
             // (self.args.train.micro_train_batch_size * self.args.train.num_nodes * self.args.train.num_gpus_per_node)
         
         logger.info("******* Start Training *******")
         logger.info(f"  Num Epochs:            {self.epochs}")
-        logger.info(f"  Steps per Epoch:       {self.num_update_steps_per_epoch}")
+        logger.info(f"  Steps per Epoch:       {self.num_rollout_iters_per_epoch}")
         logger.info(f"  Total Training Steps:  {total_steps}")
         logger.info(f"  Per-device Batch Size: {self.args.train.micro_train_batch_size}")
         logger.info(f"  Gradient Accumulation: {grad_accum}")
@@ -130,7 +130,7 @@ class OnPolicyKDTrainer:
         if self.args.train.eval_steps == -1:
             self.args.train.eval_steps = float("inf")  # Evaluate once per epoch
         if self.args.train.save_steps == -1:
-            self.args.train.save_steps = self.num_update_steps_per_epoch  # do not save ckpt
+            self.args.train.save_steps = self.num_rollout_iters_per_epoch  # do not save ckpt
         
         self.global_step = global_step
         
@@ -426,7 +426,7 @@ class OnPolicyKDTrainer:
             
     def logging(self):
         if self.global_step % self.args.log.logging_steps == 0:
-            progress = self.global_step / self.num_update_steps_per_epoch / self.epochs
+            progress = self.global_step / self.num_rollout_iters_per_epoch / self.epochs
             eta = int(time.time() - self.start_time) * (1 - progress) / progress
             progress_str = "epoch [{current_epoch}/{total_epoch}], " \
                 "step [{current_step}/{total_step}], " \
@@ -436,7 +436,7 @@ class OnPolicyKDTrainer:
                 current_epoch=self.current_epoch + 1, 
                 total_epoch=self.epochs, 
                 current_step=self.global_step, 
-                total_step=self.num_update_steps_per_epoch * self.epochs, 
+                total_step=self.num_rollout_iters_per_epoch * self.epochs, 
                 progress=progress * 100,
                 elapsed=str(timedelta(seconds=(time.time() - self.start_time))).split(".")[0],
                 eta=str(timedelta(seconds=eta)).split(".")[0]

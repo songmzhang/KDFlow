@@ -127,17 +127,18 @@ def train(args):
         )
     
     # Calculate max training steps
-    num_update_steps_per_epoch = len(train_dataset) * args.rollout.n_samples_per_prompt // args.rollout.rollout_batch_size
-    max_steps = math.ceil(args.train.num_epochs * num_update_steps_per_epoch)
-    strategy.print(f"Max training steps: {max_steps}")
+    num_rollout_iters_per_epoch = len(train_dataset) * args.rollout.n_samples_per_prompt // args.rollout.rollout_batch_size
+    num_update_steps_per_rollout = args.rollout.rollout_batch_size * args.rollout.n_samples_per_prompt // args.train.train_batch_size
+    max_rollout_iters = math.ceil(args.train.num_epochs * num_rollout_iters_per_epoch)
+    strategy.log(f"Max training iterations: {max_rollout_iters}")
     
     # Initialize student model on all workers
     ray.get(student_model.async_init_model_from_pretrained(
-        strategy, max_steps, 
+        strategy, (max_rollout_iters * num_update_steps_per_rollout), 
         teacher_tokenizer=teacher_tokenizer, 
         tokenizer_info=tokenizer_info,
     ))
-    strategy.print("Models initialized on all student actors")
+    strategy.log("Models initialized on all student actors")
     
     generate_kwargs = {
         "max_new_tokens": args.rollout.generate_max_len,
@@ -153,8 +154,8 @@ def train(args):
         is_same_tokenizer=tokenizer_info.is_identical,
         train_dataloader=train_dataloader,
         eval_dataloader=eval_dataloader,
-        max_steps=max_steps,
-        num_update_steps_per_epoch=num_update_steps_per_epoch,
+        max_rollout_iters=max_rollout_iters,
+        num_rollout_iters_per_epoch=num_rollout_iters_per_epoch,
         generate_kwargs=generate_kwargs,
     )
     
