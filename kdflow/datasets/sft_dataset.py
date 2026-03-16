@@ -46,6 +46,7 @@ class SFTDataset(Dataset):
 
         self.image_key = getattr(self.args.data, "image_key", None)
         self.same_tokenizer = self.template_identical and self.vocab_identical
+        self.teacher_student_share_input = self.same_tokenizer and (self.teacher_input_key == self.input_key)
         
         self.student_processor = get_tokenizer_or_processor(
             self.args.model.student_name_or_path, 
@@ -90,7 +91,7 @@ class SFTDataset(Dataset):
         sample = self.processed_dataset[0]
         self.strategy.print("Student prompt + response:")
         self.strategy.print(sample["stu_prompt"] + sample["stu_response"])
-        if not self.same_tokenizer:
+        if not self.teacher_student_share_input:
             self.strategy.print("Teacher prompt + response:")
             self.strategy.print(sample["tea_prompt"] + sample["tea_response"])
 
@@ -116,7 +117,7 @@ class SFTDataset(Dataset):
             result["images"] = self.load_images(data[self.image_key])
 
         if self.args.model.teacher_name_or_path is not None:
-            if not self.same_tokenizer:
+            if not self.teacher_student_share_input:
                 tea_chat_template_fn = self.teacher_processor.apply_chat_template
                 tea_prompt, tea_response = self.preprocess_data(
                     data, self.input_template, self.teacher_input_key, self.output_key,
@@ -230,7 +231,7 @@ class SFTDataset(Dataset):
         )
 
         if "tea_prompt" in item_list[0]:
-            if not self.same_tokenizer:
+            if not self.teacher_student_share_input:
                 tea_full = [item["tea_prompt"] + item["tea_response"] for item in item_list]
                 tea_enc = self._encode_batch(self.teacher_processor, tea_full, images)
                 batch["tea_input_ids"] = tea_enc["input_ids"]
