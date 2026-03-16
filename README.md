@@ -14,7 +14,7 @@
 
 ## 📰 News
 
-- **[2026/03]** 🎉 KDFlow v0.1.1 released! Now supports **vision-language (multimodal) models** and **Qwen3.5 series**.
+- **[2026/03]** 🎉 KDFlow v0.1.1 released! Now supports **vision-language (multimodal) models** and **Qwen3.5 series** (as the teacher model).
 
 ---
 
@@ -25,8 +25,7 @@
   - [Installation](#installation)
   - [Off-Policy Knowledge Distillation](#off-policy-knowledge-distillation)
   - [On-Policy Knowledge Distillation](#on-policy-knowledge-distillation)
-  - [Cross-Tokenizer Off-Policy Knowledge Distillation](#cross-tokenizer-off-policy-knowledge-distillation)
-  - [Cross-Tokenizer On-Policy Knowledge Distillation](#cross-tokenizer-on-policy-knowledge-distillation)
+  - [Cross-Tokenizer Knowledge Distillation](#cross-tokenizer-knowledge-distillation)
   - [Supervised Fine-Tuning (SFT)](#supervised-fine-tuning-sft)
 - [⚙️ Configuration Reference](#️-configuration-reference)
 - [🧩 Extending KDFlow](#-extending-kdflow)
@@ -72,6 +71,8 @@ cd KDFlow
 pip install -e ./
 ```
 
+> Since SGLang 0.5.9 does not support transformers v5, please use transformers v4.57.1 to ensure correct teacher computation.
+
 ### Off-Policy Knowledge Distillation
 LLMs:
 ```bash
@@ -92,7 +93,9 @@ VLMs:
 bash ./examples/on_policy_kd/run_qwen3_vl_30b_a3b_to_4b.sh
 ```
 
-### Cross-Tokenizer Off-Policy Knowledge Distillation
+### Cross-Tokenizer Knowledge Distillation
+
+#### Off-Policy
 
 Use SimpleCrossTokenizerKD (suggested):
 ```bash
@@ -105,7 +108,7 @@ or DSKD:
 bash ./examples/cross_tokenizer_kd/run_qwen3_30b_a3b_to_llama3_2_3b_offpolicy.sh
 ```
 
-### Cross-Tokenizer On-Policy Knowledge Distillation
+#### Off-Policy
 
 Use SimpleCrossTokenizerKD (suggested):
 ```bash
