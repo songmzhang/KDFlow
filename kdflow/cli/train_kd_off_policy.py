@@ -119,7 +119,7 @@ def train(args):
     # Calculate max training steps
     num_update_steps_per_epoch = len(train_dataset) // args.train.train_batch_size
     max_steps = math.ceil(args.train.num_epochs * num_update_steps_per_epoch)
-    strategy.print(f"Max training steps: {max_steps}")
+    strategy.log(f"Max training steps: {max_steps}")
     
     # Initialize student model on all workers
     ray.get(student_model.async_init_model_from_pretrained(
@@ -128,8 +128,7 @@ def train(args):
         tokenizer_info=tokenizer_info,
     ))
     
-     # Initialize teacher model on all teacher actors
-    strategy.print("Models initialized on all student actors")
+    strategy.log("Models initialized on all student actors")
     
     # Initialize OffPolicyKDRayTrainer (Single controller)
     trainer = OffPolicyKDTrainer(
