@@ -161,7 +161,9 @@ class OnPolicyKDTrainer:
                 teacher_start = time.time()
                 if self.args.kd.teacher_enable_sleep:
                     self.teacher.wakeup()
+                    
                 rollout_samples_for_kd = self.teacher.forward(rollout_samples)
+                
                 if self.args.kd.teacher_enable_sleep:
                     self.teacher.sleep()
                 self.log_state["teacher_fwd_time"].append(time.time() - teacher_start)

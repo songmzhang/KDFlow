@@ -1,9 +1,7 @@
-import time
 from itertools import chain
 from typing import Optional, Tuple, Union
 
 import ray
-import torch
 import numpy as np
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
@@ -163,7 +161,9 @@ class TeacherActorGroup:
         future_to_idx = {f: i for i, f in enumerate(futures)}
         
         while pending:
-            ready, pending = ray.wait(pending, num_returns=1)
+            ready, pending = ray.wait(pending, num_returns=1, timeout=60)
+            if not ready:
+                continue
             for ref in ready:
                 idx = future_to_idx[ref]
                 raw_results[idx] = ray.get(ref)

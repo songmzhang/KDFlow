@@ -1,16 +1,15 @@
 import os
+import pickle
 import multiprocessing as mp
 from multiprocessing import Queue
-from multiprocessing.shared_memory import SharedMemory
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
+import zmq
 import numpy as np
 import torch
 from sglang.srt.entrypoints.engine import Engine as _SglEngine
 from sglang.srt.managers.scheduler import run_scheduler_process as _original_run_scheduler_process
-
-_DEFAULT_SHM_POOL_SIZE = 1024 * 2048 * 4096
 
 
 def _patched_run_scheduler_process(*args, **kwargs):
@@ -46,26 +45,20 @@ class EngineConfig:
     quantization: str = None
     offload_tags: Optional[str] = "all"
     base_gpu_id: int = 0
-    shm_pool_size: int = _DEFAULT_SHM_POOL_SIZE
 
 
 def _engine_worker(config: EngineConfig, request_queue: Queue, response_queue: Queue):
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
     engine = None
-    shm_pool = None
+    zmq_ctx = None
 
     try:
-        # Create shared memory pool
-        shm_pool_name = f"sglang_hs_pool_{os.getpid()}"
-        try:
-            old = SharedMemory(name=shm_pool_name)
-            old.close()
-            old.unlink()
-        except FileNotFoundError:
-            pass
-        shm_pool = SharedMemory(name=shm_pool_name, create=True, size=config.shm_pool_size)
-
+        zmq_ctx = zmq.Context()
+        data_socket = zmq_ctx.socket(zmq.PUSH)
+        zmq_ipc_addr = f"ipc:///tmp/sglang_hs_{os.getpid()}"
+        data_socket.bind(zmq_ipc_addr)
+        
         engine = PatchedEngine(
             model_path=config.model_path,
             tp_size=config.tp_size,
@@ -81,7 +74,11 @@ def _engine_worker(config: EngineConfig, request_queue: Queue, response_queue: Q
             base_gpu_id=config.base_gpu_id,
         )
 
-        response_queue.put({"type": "init_done", "success": True, "shm_pool_name": shm_pool_name})
+        response_queue.put({
+            "type": "init_done", 
+            "success": True, 
+            "zmq_ipc_addr": zmq_ipc_addr
+        })
 
         while True:
             request = request_queue.get()
@@ -92,8 +89,7 @@ def _engine_worker(config: EngineConfig, request_queue: Queue, response_queue: Q
 
             try:
                 if req_type == "generate":
-                    _handle_generate(engine, request, shm_pool, shm_pool_name,
-                                     request_queue, response_queue)
+                    _handle_generate(engine, request, data_socket, request_queue, response_queue)
                 elif req_type == "sleep":
                     _handle_sleep(engine, request, config, response_queue)
                 elif req_type == "wakeup":
@@ -111,10 +107,10 @@ def _engine_worker(config: EngineConfig, request_queue: Queue, response_queue: Q
         response_queue.put({"type": "init_done", "success": False,
                             "error": traceback.format_exc()})
     finally:
-        if shm_pool:
+        if zmq_ctx:
             try:
-                shm_pool.close()
-                shm_pool.unlink()
+                data_socket.close()
+                zmq_ctx.term()
             except Exception:
                 pass
         if engine:
@@ -122,7 +118,7 @@ def _engine_worker(config: EngineConfig, request_queue: Queue, response_queue: Q
                 engine.shutdown()
             except Exception:
                 pass
-        print("[SGLangEngineWorker] Worker process exiting")
+
 
 
 def _normalize_tags(tags):
@@ -134,10 +130,10 @@ def _normalize_tags(tags):
     return tags
 
 
-def _handle_generate(engine, request, shm_pool, shm_pool_name,
-                     request_queue, response_queue):
-    """Handle a generate request: run inference and write hidden states to shared memory."""
+def _handle_generate(engine, request, data_socket, request_queue, response_queue):
+    """Handle a generate request: run inference and send hidden states via ZMQ."""
     kwargs = request["kwargs"]
+
     generate_kwargs = {
         "prompt": kwargs["prompt"],
         "sampling_params": kwargs["sampling_params"],
@@ -145,37 +141,27 @@ def _handle_generate(engine, request, shm_pool, shm_pool_name,
     }
     if kwargs.get("image_data") is not None:
         generate_kwargs["image_data"] = kwargs["image_data"]
+
     outputs = engine.generate(**generate_kwargs)
 
-    offsets_meta = []
-    current_offset = 0
-
-    for output, mask in zip(outputs, kwargs["loss_masks"]):
+    num_samples = len(outputs)
+    
+    response_queue.put({
+        "type": "generate",
+        "success": True,
+        "num_samples": num_samples,
+    })
+    
+    for i, (output, mask) in enumerate(zip(outputs, kwargs["loss_masks"])):
         hs_np = output["meta_info"]["hidden_states"][0]
         hs_np = hs_np[:mask.shape[0]]  # loss_mask may have been truncated
         hs_np = hs_np[mask]
         if not hs_np.flags['C_CONTIGUOUS']:
             hs_np = np.ascontiguousarray(hs_np)
-
-        shm_pool.buf[current_offset:current_offset + hs_np.nbytes] = hs_np.tobytes()
-        offsets_meta.append({
-            "offset": current_offset,
-            "shape": hs_np.shape,
-            "dtype": str(hs_np.dtype),
-            "nbytes": hs_np.nbytes,
-        })
-        current_offset += hs_np.nbytes
-
-    response_queue.put({
-        "type": "generate",
-        "success": True,
-        "shm_pool_name": shm_pool_name,
-        "offsets_meta": offsets_meta,
-    })
-
-    # Wait for consumer to finish reading shared memory
-    cleanup_signal = request_queue.get()
-    assert cleanup_signal and cleanup_signal.get("type") == "cleanup_shm"
+            
+        meta = pickle.dumps({"shape": hs_np.shape, "dtype": str(hs_np.dtype)})
+        data_socket.send(meta, flags=zmq.SNDMORE)
+        data_socket.send(hs_np, copy=False)
 
 
 def _handle_sleep(engine, request, config, response_queue):
@@ -187,32 +173,23 @@ def _handle_sleep(engine, request, config, response_queue):
 
 def _handle_wakeup(engine, request, config, response_queue):
     """Handle a wakeup request: restore GPU memory."""
-    torch.cuda.empty_cache()
     tags = request.get("tags", config.offload_tags)
+    torch.cuda.empty_cache()
     engine.resume_memory_occupation(tags=_normalize_tags(tags))
     response_queue.put({"type": "wakeup", "success": True, "tags": tags})
 
 
 class SGLangEngineService:
-    """Manages SGLang Engine in a subprocess with shared memory communication."""
+    """Manages SGLang Engine in a subprocess with ZMQ communication."""
 
-    def __init__(
-        self,
-        config: EngineConfig,
-        batch_size: Optional[int] = None,
-        max_seq_len: Optional[int] = None,
-        hidden_dim: Optional[int] = None,
-    ):
-        # Dynamically compute shm_pool_size if all three params are provided
-        if batch_size is not None and max_seq_len is not None and hidden_dim is not None:
-            # float32 = 4 bytes per element
-            config.shm_pool_size = batch_size * max_seq_len * hidden_dim * 4
+    def __init__(self, config: EngineConfig):
         self.config = config
         self.process: Optional[mp.Process] = None
         self.request_queue: Optional[Queue] = None
         self.response_queue: Optional[Queue] = None
         self._started = False
-        self._shm_pool: Optional[SharedMemory] = None
+        self._zmq_ctx: Optional[zmq.Context] = None
+        self._data_socket = None
 
     def start(self, timeout: float = 1800.0):
         """Start the SGLang Engine in a subprocess."""
@@ -237,8 +214,9 @@ class SGLangEngineService:
             response = self.response_queue.get(timeout=timeout)
             if response.get("type") == "init_done" and response.get("success"):
                 self._started = True
-                self._shm_pool = SharedMemory(name=response["shm_pool_name"])
-                print(f"[SGLangEngineService] Engine started, shm pool: {response['shm_pool_name']}")
+                self._zmq_ctx = zmq.Context()
+                self._data_socket = self._zmq_ctx.socket(zmq.PULL)
+                self._data_socket.connect(response["zmq_ipc_addr"])
             else:
                 raise RuntimeError(f"Init failed: {response.get('error')}")
         except Exception as e:
@@ -253,7 +231,7 @@ class SGLangEngineService:
         return_hidden_states: bool = True,
         image_data=None,
     ) -> List[np.ndarray]:
-        """Run generation and return hidden states via shared memory.
+        """Run generation and return hidden states via ZMQ.
         
         Args:
             prompt: List of raw text prompts. SGLang handles tokenization internally.
@@ -265,6 +243,13 @@ class SGLangEngineService:
         if not self._started:
             raise RuntimeError("Service not started")
 
+        # Check if subprocess is still alive before sending request
+        if self.process and not self.process.is_alive():
+            raise RuntimeError(
+                f"[SGLangEngineService] Engine subprocess (PID={self.process.pid}) is dead! "
+                f"exitcode={self.process.exitcode}"
+            )
+
         kwargs = {
             "prompt": prompt,
             "loss_masks": loss_masks,
@@ -274,26 +259,22 @@ class SGLangEngineService:
         if image_data is not None:
             kwargs["image_data"] = image_data
 
-        self.request_queue.put({
-            "type": "generate",
-            "kwargs": kwargs,
-        })
+        self.request_queue.put({"type": "generate", "kwargs": kwargs})
 
         response = self.response_queue.get()
         if not response.get("success"):
             raise RuntimeError(f"Generate failed: {response.get('error')}")
 
-        # Read hidden states from shared memory
+        # Read hidden states via ZMQ
+        num_samples = response["num_samples"]
         hidden_states = []
-        for meta in response.get("offsets_meta", []):
-            hs = np.ndarray(
-                tuple(meta["shape"]),
-                dtype=np.dtype(meta["dtype"]),
-                buffer=self._shm_pool.buf[meta["offset"]:meta["offset"] + meta["nbytes"]],
-            ).copy()
-            hidden_states.append(hs)
+        for _ in range(num_samples):
+            meta_bytes = self._data_socket.recv()
+            data_bytes = self._data_socket.recv()
+            meta = pickle.loads(meta_bytes)
+            hs = np.frombuffer(data_bytes, dtype=np.dtype(meta["dtype"])).reshape(meta["shape"])
+            hidden_states.append(hs.copy())  # copy because zmq buffer will be reused
 
-        self.request_queue.put({"type": "cleanup_shm"})
         return hidden_states
 
     def sleep(self, tags: Optional[str] = "all"):
@@ -322,16 +303,22 @@ class SGLangEngineService:
             return
         self._started = False
         self._cleanup()
-        print("[SGLangEngineService] Service shutdown complete")
+
 
     def _cleanup(self):
         """Clean up subprocess, queues and shared memory."""
-        if self._shm_pool:
+        if self._data_socket:
             try:
-                self._shm_pool.close()
+                self._data_socket.close()
             except Exception:
                 pass
-            self._shm_pool = None
+            self._data_socket = None
+        if self._zmq_ctx:
+            try:
+                self._zmq_ctx.term()
+            except Exception:
+                pass
+            self._zmq_ctx = None
 
         if self.request_queue:
             try:

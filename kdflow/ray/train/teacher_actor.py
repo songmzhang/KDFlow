@@ -1,10 +1,8 @@
 import os
-import time
 
 import ray
 import torch
 import numpy as np
-from transformers import AutoConfig
 
 from kdflow.utils.utils import remove_pad_token
 from kdflow.backend.sglang.sglang_engine import SGLangEngineService, EngineConfig
@@ -44,23 +42,6 @@ class TeacherRayActor:
         # Disable tokenizers parallelism to avoid deadlock with multiprocessing
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
         
-        # Get hidden_dim from teacher model config for shm_pool_size calculation
-        teacher_config = AutoConfig.from_pretrained(
-            strategy.args.model.teacher_name_or_path, trust_remote_code=True
-        )
-        if hasattr(teacher_config, "text_config"):  # for VLM
-            hidden_dim = teacher_config.text_config.hidden_size
-        else:
-            hidden_dim = teacher_config.hidden_size
-            
-        # Each teacher actor processes: global_batch_size * forward_n_batches / dp_size samples
-        batch_size = (
-            strategy.args.train.train_batch_size
-            * strategy.args.kd.teacher_forward_n_batches
-            // strategy.args.kd.teacher_dp_size
-        )
-        max_seq_len = strategy.args.data.max_len
-        
         # Create engine configuration
         # GPU binding is handled by base_gpu_id (works with RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES)
         self.engine_config = EngineConfig(
@@ -80,12 +61,7 @@ class TeacherRayActor:
         )
         
         # Initialize SGLang Engine service (runs in subprocess)
-        self.engine_service = SGLangEngineService(
-            self.engine_config,
-            batch_size=batch_size,
-            max_seq_len=max_seq_len,
-            hidden_dim=hidden_dim,
-        )
+        self.engine_service = SGLangEngineService(self.engine_config)
         self.engine_service.start()
         
         if self.strategy.args.kd.teacher_enable_sleep:
