@@ -242,6 +242,9 @@ class RolloutRayActor:
 
         self.process = None
         logger.info(f"[RolloutActor {self.rank}] Shutdown complete")
+        
+    def __del__(self):
+        self.shutdown()
 
     # ---- Static helper methods ----
 
