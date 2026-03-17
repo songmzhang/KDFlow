@@ -323,10 +323,6 @@ class OnPolicyKDTrainer:
             Dict with ``{prefix}_input_ids``, ``{prefix}_attn_mask``, ``{prefix}_loss_mask``
             and optional multimodal fields.
         """
-        eos_token = processor.tokenizer.eos_token if hasattr(processor, "tokenizer") else processor.eos_token
-        if not response.endswith(eos_token):
-            response += " " + eos_token
-
         prompt_input = {"text": prompt}
         if images:
             prompt_input["images"] = images
@@ -342,7 +338,7 @@ class OnPolicyKDTrainer:
 
         input_ids = full_tok["input_ids"][0]
         attn_mask = full_tok["attention_mask"][0]
-        loss_mask = torch.tensor([False] * prompt_len + [True] * resp_len).roll(shifts=-1)
+        loss_mask = torch.tensor([False] * (prompt_len - 1) + [True] * (resp_len + 1))
 
         result = {
             f"{prefix}_input_ids": input_ids,
@@ -402,10 +398,6 @@ class OnPolicyKDTrainer:
         total_length = stu_tokens["stu_attn_mask"].float().sum()
         
         # Build tea_full_text for teacher actor (SGLang engine uses raw text)
-        teacher_eos_token = self.teacher_processor.tokenizer.eos_token \
-            if hasattr(self.teacher_processor, "tokenizer") else self.teacher_processor.eos_token
-        if not response_text.endswith(teacher_eos_token):
-            response_text += " " + teacher_eos_token
         tea_full_text = tea_prompt + response_text
 
         sample = {
