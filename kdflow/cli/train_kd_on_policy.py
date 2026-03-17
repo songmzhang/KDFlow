@@ -159,14 +159,13 @@ def train(args):
         generate_kwargs=generate_kwargs,
     )
     
-    # Run off-policy distillation training
-    trainer.fit()
-    
-    # Save final model
-    ray.get(student_model.async_save_model())
-    strategy.log("Training completed and model saved.")
-    
-    teacher_model.shutdown()
+    try:
+        trainer.fit()
+        ray.get(student_model.async_save_model())
+        strategy.log("Training completed and model saved.")
+    finally:
+        teacher_model.shutdown()
+        rollout_group.shutdown()
 
 
 if __name__ == "__main__":
