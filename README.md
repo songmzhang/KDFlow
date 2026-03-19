@@ -3,7 +3,7 @@
 
   ### **A User-friendly and Efficient Framework for LLM Knowledge Distillation**
 
-  [![GitHub Repo](https://img.shields.io/badge/github-songmzhang%2FKDFlow-black?logo=github)](https://github.com/songmzhang/KDFlow)
+  [![Release](https://img.shields.io/github/v/release/songmzhang/KDFlow)](https://github.com/songmzhang/KDFlow/releases)
   [![License](https://img.shields.io/github/license/songmzhang/KDFlow)](LICENSE)
   [![arXiv](https://img.shields.io/badge/arXiv-2603.01875-b31b1b?logo=arxiv)](https://arxiv.org/abs/2603.01875)
   [![Stars](https://img.shields.io/github/stars/songmzhang/KDFlow?style=social)](https://github.com/songmzhang/KDFlow)
