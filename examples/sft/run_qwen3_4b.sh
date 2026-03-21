@@ -37,4 +37,4 @@ OPTS+=" --wandb_run_name qwen3_4b_sft"
 OPTS+=" --wandb_mode offline"
 OPTS+=" --wandb_dir ./output"
 
-torchrun --nproc_per_node=8 kdflow.cli.train_sft $OPTS
+torchrun --nproc_per_node=8 -m kdflow.cli.train_sft $OPTS

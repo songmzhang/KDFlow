@@ -5,7 +5,7 @@ from torch.utils.data import Dataset
 from PIL import Image
 
 from kdflow.datasets.utils import convert_to_openai_messages, get_tokenizer_or_processor
-from kdflow.model.utils import TokenizerCompareResult
+from kdflow.models.utils import TokenizerCompareResult
 
 class SFTDataset(Dataset):
     """
