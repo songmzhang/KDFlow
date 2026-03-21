@@ -5,7 +5,7 @@ from torch.utils.data import Dataset
 from PIL import Image
 
 from kdflow.datasets.utils import convert_to_openai_messages, get_tokenizer_or_processor
-
+from kdflow.model.utils import TokenizerCompareResult
 
 class SFTDataset(Dataset):
     """
@@ -24,7 +24,7 @@ class SFTDataset(Dataset):
         self,
         dataset,
         strategy,
-        tokenizer_info,
+        tokenizer_info: Optional[TokenizerCompareResult] = None,
         max_data_num: int = -1,
         input_template: Optional[str] = None,
         num_processors: int = 8,
@@ -34,8 +34,8 @@ class SFTDataset(Dataset):
         self.strategy = strategy
         self.max_length = self.args.data.max_len
         self.tokenizer_info = tokenizer_info
-        self.template_identical = self.tokenizer_info.template_identical
-        self.vocab_identical = self.tokenizer_info.vocab_identical
+        self.template_identical = True if tokenizer_info is None else self.tokenizer_info.template_identical
+        self.vocab_identical = True if tokenizer_info is None else self.tokenizer_info.vocab_identical
 
         self.input_template = input_template
         self.input_key = getattr(self.args.data, "input_key", None)

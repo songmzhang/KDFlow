@@ -40,11 +40,9 @@ def train(args):
     train_data = train_data.select(range(min(args.data.max_samples, len(train_data))))
     train_dataset = SFTDataset(
         train_data, 
-        student.tokenizer, 
-        args.data.max_len,
         strategy, 
-        input_template=args.data.input_template,
         max_data_num=args.data.max_samples,
+        input_template=args.data.input_template,
     )
     train_dataloader = strategy.setup_dataloader(
         train_dataset,
