@@ -107,7 +107,6 @@ class DistillModel(nn.Module):
             position_ids.masked_fill_(attention_mask == 0, 1)
 
         output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids, output_hidden_states=True, **kwargs)
-        output["logits"] = output["logits"].to(torch.float32)
         
         if allgather_logits and self.packing_samples:
             output["logits"] = gather_and_pad_tensor(
