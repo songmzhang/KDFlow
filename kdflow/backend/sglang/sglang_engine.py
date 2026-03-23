@@ -167,6 +167,7 @@ def _handle_generate(engine, request, data_socket, request_queue, response_queue
 def _handle_sleep(engine, request, config, response_queue):
     """Handle a sleep request: offload GPU memory."""
     tags = request.get("tags", config.offload_tags)
+    torch.cuda.empty_cache()
     engine.release_memory_occupation(tags=_normalize_tags(tags))
     response_queue.put({"type": "sleep", "success": True, "tags": tags})
 
