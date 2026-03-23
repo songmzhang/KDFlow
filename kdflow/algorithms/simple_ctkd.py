@@ -48,6 +48,10 @@ class SimpleCrossTokenizerKD:
         tea_seq = [token.replace('▁', '').replace('Ġ', '') for token in tea_seq]
         stu_seq = [token.replace('▁', '').replace('Ġ', '') for token in stu_seq]
 
+        if tea_seq == stu_seq:
+            indices = list(range(len(tea_seq)))
+            return indices, indices
+
         while i < len(tea_seq) and j < len(stu_seq):
             is_eos_match = (tea_seq[i] == tea_eos and stu_seq[j] == stu_eos)
             if history_tea_seq == history_stu_seq and (
