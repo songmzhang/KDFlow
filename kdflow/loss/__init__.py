@@ -30,9 +30,10 @@ def build_loss_fn(name, args):
 
     extra_params = {
         "jsd":         {"jsd_beta": kd.jsd_beta},
-        "skewed_kl":   {"skew_lambda": kd.skew_lambda},
-        "skewed_rkl":  {"skew_lambda": kd.skew_lambda},
-        "adaptive_kl": {"adaptive_kl_alpha": kd.adaptive_alpha},
+        "skl":         {"skew_lambda": kd.skew_lambda},
+        "srkl":        {"skew_lambda": kd.skew_lambda},
+        "akl":         {"adaptive_kl_alpha": kd.adaptive_alpha},
+        "hrl":         {"hrl_topk": kd.hrl_topk},
     }
 
     return partial(fn, **common, **extra_params.get(name, {}))

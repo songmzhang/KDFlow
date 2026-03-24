@@ -95,6 +95,11 @@ class DistillationArguments:
         default=0.5,
         metadata={"help": "Alpha for Adaptive KL Divergence."}
     )
+    # Hierarchical Ranking Loss
+    hrl_topk: int = field(
+        default=5,
+        metadata={"help": "Top-k Ranking for Hierarchical Ranking Loss."}
+    )
 
     def __post_init__(self):
         # Validate teacher parallel size settings
