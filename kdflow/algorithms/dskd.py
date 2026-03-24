@@ -37,8 +37,63 @@ class DSKD:
         self.vocab_identical = tokenizer_info.vocab_identical if tokenizer_info else True
         self.loss_fn = build_loss_fn(self.args.kd.kd_loss_fn, self.args)
         
+        if not self.vocab_identical:
+            self._init_vocab_mapping()
         self._init_projectors()
         
+    def _init_vocab_mapping(self):
+        """Build a teacher_id -> student_id mapping tensor for fast token conversion.
+        
+        For each token in the teacher vocabulary, find the corresponding token in the
+        student vocabulary (after normalizing special prefixes like ▁ and Ġ).
+        Unmapped teacher ids are mapped to -1.
+        """
+        student_vocab = {k.replace("Ġ", "▁"): v for k, v in self.student_tokenizer.get_vocab().items()}
+        teacher_vocab = {k.replace("Ġ", "▁"): v for k, v in self.teacher_tokenizer.get_vocab().items()}
+
+        teacher_vocab_size, student_vocab_size = len(teacher_vocab), len(student_vocab)
+        t2s_id_mapping = torch.full((teacher_vocab_size,), -1, dtype=torch.long)
+        s2t_id_mapping = torch.full((student_vocab_size,), -1, dtype=torch.long)
+
+        t2s_mapped_count = 0
+        for token, tea_id in teacher_vocab.items():
+            if token in student_vocab:
+                t2s_id_mapping[tea_id] = student_vocab[token]
+                t2s_mapped_count += 1
+                
+        s2t_mapped_count = 0
+        for token, stu_id in student_vocab.items():
+            if token in teacher_vocab:
+                s2t_id_mapping[stu_id] = teacher_vocab[token]
+                s2t_mapped_count += 1
+
+        self.t2s_id_mapping = t2s_id_mapping
+        self.s2t_id_mapping = s2t_id_mapping
+        logger.info(
+            f"Built teacher->student id mapping: {t2s_mapped_count}/{teacher_vocab_size} "
+            f"tokens mapped ({t2s_mapped_count/teacher_vocab_size*100:.1f}%)"
+        )
+        logger.info(
+            f"Built student->teacher id mapping: {s2t_mapped_count}/{student_vocab_size} "
+            f"tokens mapped ({s2t_mapped_count/student_vocab_size*100:.1f}%)"
+        )
+
+        # Handle special tokens for t2s_id_mapping
+        if self.teacher_tokenizer.eos_token_id is not None and self.student_tokenizer.eos_token_id is not None:
+            self.t2s_id_mapping[self.teacher_tokenizer.eos_token_id] = self.student_tokenizer.eos_token_id
+        if self.teacher_tokenizer.bos_token_id is not None and self.student_tokenizer.bos_token_id is not None:
+            self.t2s_id_mapping[self.teacher_tokenizer.bos_token_id] = self.student_tokenizer.bos_token_id
+        if self.teacher_tokenizer.pad_token_id is not None and self.student_tokenizer.pad_token_id is not None:
+            self.t2s_id_mapping[self.teacher_tokenizer.pad_token_id] = self.student_tokenizer.pad_token_id
+
+        # Handle special tokens for s2t_id_mapping
+        if self.student_tokenizer.eos_token_id is not None and self.teacher_tokenizer.eos_token_id is not None:
+            self.s2t_id_mapping[self.student_tokenizer.eos_token_id] = self.teacher_tokenizer.eos_token_id
+        if self.student_tokenizer.bos_token_id is not None and self.teacher_tokenizer.bos_token_id is not None:
+            self.s2t_id_mapping[self.student_tokenizer.bos_token_id] = self.teacher_tokenizer.bos_token_id
+        if self.student_tokenizer.pad_token_id is not None and self.teacher_tokenizer.pad_token_id is not None:
+            self.s2t_id_mapping[self.student_tokenizer.pad_token_id] = self.teacher_tokenizer.pad_token_id
+
     def _init_projectors(self):
         """
         projector initialization aims to achieve logit equivalence (take W^{t2s} as an example): 
@@ -215,7 +270,7 @@ class DSKD:
             student_logits, 
             t2s_logits.detach(),
             reduction="none"
-        ) * t2s_agreement_mask).sum() / avg_token_num
+        ) * t2s_agreement_mask).sum() / max(t2s_agreement_mask.sum(), 1e-8)
         
         # === s2t path ===
         stu_lm_head = self.student_lm_head.detach().transpose(0, 1)
@@ -357,7 +412,6 @@ class DSKD:
     ):
         device = student_hiddens.device
         N = student_hiddens.shape[0]
-        M = teacher_hiddens.shape[0]
 
         student_labels_flat = student_input_ids.roll(shifts=-1, dims=1)[student_loss_mask]
         teacher_labels_flat = teacher_input_ids.roll(shifts=-1, dims=1)[teacher_loss_mask]
@@ -373,64 +427,57 @@ class DSKD:
 
         t_preds = teacher_logits.argmax(-1)
 
-        t2s_hiddens_align = torch.zeros(N, tea_v_hiddens.shape[-1], device=device, dtype=tea_v_hiddens.dtype)
-        s2t_hiddens_align = torch.zeros(M, stu_v_hiddens.shape[-1], device=device, dtype=stu_v_hiddens.dtype)
-        t_preds_as_label = torch.full((N,), -100, device=device, dtype=torch.long)
-
         tea_tokens = self.teacher_tokenizer.convert_ids_to_tokens(teacher_labels_flat)
         stu_tokens = self.student_tokenizer.convert_ids_to_tokens(student_labels_flat)
-        align_t_idx, align_s_idx = self._align_sequences(tea_tokens, stu_tokens)
+        
+        if tea_tokens == stu_tokens:
+            align_t_idx, align_s_idx = list(range(len(tea_tokens))), list(range(len(stu_tokens)))
+        else:
+            align_t_idx, align_s_idx = self._align_sequences(tea_tokens, stu_tokens)
+            
+        align_t_idx = torch.tensor(align_t_idx, dtype=torch.long, device=device)
+        align_s_idx = torch.tensor(align_s_idx, dtype=torch.long, device=device)
 
-        for _t_idx, _s_idx in zip(align_t_idx, align_s_idx):
-            tmp_t_token = self.teacher_tokenizer.convert_ids_to_tokens(
-                [t_preds[_t_idx]]
-            )
-            if t_preds[_t_idx] == self.teacher_tokenizer.eos_token_id:
-                t_preds_as_label[_s_idx] = self.student_tokenizer.eos_token_id
-                t2s_hiddens_align[_s_idx] = tea_v_hiddens[_t_idx]
-                s2t_hiddens_align[_t_idx] = stu_v_hiddens[_s_idx]
-            else:
-                try:
-                    tmp = self.student_tokenizer.convert_tokens_to_ids(tmp_t_token)
-                    if len(tmp) == 1 and tmp[0] is not None:
-                        t_preds_as_label[_s_idx] = tmp[0]
-                        t2s_hiddens_align[_s_idx] = tea_v_hiddens[_t_idx]
-                        s2t_hiddens_align[_t_idx] = stu_v_hiddens[_s_idx]
-                except:
-                    pass
+        t_preds_aligned = self.t2s_id_mapping.to(device)[t_preds[align_t_idx]]
+        valid_mask = t_preds_aligned.ne(-1)
+        align_t_idx = align_t_idx[valid_mask]
+        align_s_idx = align_s_idx[valid_mask]
+        t_preds_aligned_valid = t_preds_aligned[valid_mask]
 
-        align_ratio = len(align_s_idx) / max(N, 1)
+        t2s_hiddens_align = tea_v_hiddens[align_t_idx]
+        s2t_hiddens_align = stu_v_hiddens[align_s_idx]
+
+        align_ratio = len(align_t_idx) / max(N, 1)
+        stu_align_token_num = max(t_preds_aligned_valid.shape[0], 1)
 
         t2s_logits = t2s_hiddens_align.matmul(
             self.student_lm_head.to(t2s_hiddens_align).detach().transpose(-1, -2)
         )
 
-        stu_align_token_num = max(1e-3, t_preds_as_label.ne(-100).sum().item())
-        t2s_agreement_mask = t2s_logits.argmax(-1).eq(t_preds_as_label)
-        t2s_agreement = (
-            (t2s_agreement_mask * t_preds_as_label.ne(-100)).sum() / stu_align_token_num
-        )
+        t2s_agreement_mask = t2s_logits.argmax(-1).eq(t_preds_aligned_valid)
+        t2s_agreement = t2s_agreement_mask.sum() / stu_align_token_num
 
-        t2s_acc = (t2s_logits.argmax(-1).eq(student_labels_flat)).sum() / avg_token_num
+        t2s_acc = (t2s_logits.argmax(-1).eq(student_labels_flat[align_s_idx])).sum() / avg_token_num
 
         t2s_ce_loss = F.cross_entropy(
-            t2s_logits, t_preds_as_label, ignore_index=-100, reduction="sum"
+            t2s_logits, t_preds_aligned_valid, reduction="sum"
         ) / stu_align_token_num
 
-        t2s_kd_loss = self.loss_fn(
-            student_logits,
+        t2s_kd_loss = (self.loss_fn(
+            student_logits[align_s_idx],
             t2s_logits.detach(),
-            reduction="sum"
-        ) / avg_token_num
-
+            reduction="none"
+        ) * t2s_agreement_mask).sum() / max(t2s_agreement_mask.sum(), 1e-8)
+        
         s2t_logits = self.teacher_lm_head(s2t_hiddens_align)
-        s2t_valid_mask = ~s2t_hiddens_align.eq(0).all(-1)
+        stu_preds_aligned = self.s2t_id_mapping.to(device)[student_logits[align_s_idx].argmax(-1)]
+        s2t_agreement_mask = s2t_logits.argmax(-1).eq(stu_preds_aligned)
+        s2t_agreement = s2t_agreement_mask.sum() / len(align_s_idx)
         s2t_kd_loss = self.loss_fn(
             s2t_logits,
-            teacher_logits,
-            reduction="none"
-        )
-        s2t_kd_loss = (s2t_kd_loss * s2t_valid_mask.float()).sum() / max(s2t_valid_mask.sum().item(), 1e-8)
+            teacher_logits[align_t_idx],
+            reduction="sum"
+        ) / stu_align_token_num
 
         kd_loss = t2s_kd_loss + t2s_ce_loss + s2t_kd_loss
 
@@ -440,8 +487,9 @@ class DSKD:
             "t2s_ce_loss": t2s_ce_loss,
             "t2s_kd_loss": t2s_kd_loss,
             "t2s_agreement": t2s_agreement,
-            "s2t_kd_loss": s2t_kd_loss,
             "t2s_acc": t2s_acc,
+            "s2t_kd_loss": s2t_kd_loss,
+            "s2t_agreement": s2t_agreement,
             "align_ratio": torch.tensor(align_ratio, device=device),
         }
 
@@ -454,19 +502,17 @@ class DSKD:
 
         tea_eos = self.teacher_tokenizer.eos_token
         stu_eos = self.student_tokenizer.eos_token
+        EOS = "<|eos|>"
 
-        tea_seq = [token.replace('▁', '').replace('Ġ', '') for token in tea_seq]
-        stu_seq = [token.replace('▁', '').replace('Ġ', '') for token in stu_seq]
+        tea_seq = [EOS if token == tea_eos else token.replace('▁', '').replace('Ġ', '') for token in tea_seq]
+        stu_seq = [EOS if token == stu_eos else token.replace('▁', '').replace('Ġ', '') for token in stu_seq]
 
         if tea_seq == stu_seq:
             indices = list(range(len(tea_seq)))
             return indices, indices
 
         while i < len(tea_seq) and j < len(stu_seq):
-            is_eos_match = (tea_seq[i] == tea_eos and stu_seq[j] == stu_eos)
-            if history_tea_seq == history_stu_seq and (
-                tea_seq[i] == stu_seq[j] or is_eos_match
-            ):
+            if history_tea_seq == history_stu_seq and tea_seq[i] == stu_seq[j]:
                 common_text = tea_seq[i]
                 history_tea_seq += common_text
                 history_stu_seq += common_text
