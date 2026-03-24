@@ -23,7 +23,7 @@ def compute_hierarchical_ranking_loss(
     stu_co_topk_probs = student_probs.gather(-1, tea_topk_idxs)
     tea_co_topk_probs = teacher_probs.gather(-1, stu_topk_idxs)
     
-    stu_topk_margin = stu_co_topk_probs[:, :, :1] - stu_co_topk_probs
+    stu_topk_margin = stu_co_topk_probs[..., :1] - stu_co_topk_probs
     stu_other_margin = stu_co_topk_probs.unsqueeze(-1) - stu_topk_probs.unsqueeze(-2)
     tea_other_margin = stu_topk_probs.unsqueeze(-1) - tea_co_topk_probs.unsqueeze(-2)
     topk_rank_loss = torch.maximum(torch.zeros_like(stu_topk_margin), -stu_topk_margin)
