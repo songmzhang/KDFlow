@@ -75,13 +75,13 @@ class SFTTrainer:
         grad_accum = self.args.train.train_batch_size * self.args.model.ring_attn_size \
             // (self.args.train.micro_train_batch_size * self.args.train.num_nodes * self.args.train.num_gpus_per_node)
         
-        self.strategy.info("******* Start Training *******")
-        self.strategy.info(f"  Num Epochs:            {self.epochs}")
-        self.strategy.info(f"  Steps per Epoch:       {self.num_update_steps_per_epoch}")
-        self.strategy.info(f"  Total Training Steps:  {total_steps}")
-        self.strategy.info(f"  Per-device Batch Size: {self.args.train.micro_train_batch_size}")
-        self.strategy.info(f"  Gradient Accumulation: {grad_accum}")
-        self.strategy.info(f"  Learning Rate:         {self.args.train.learning_rate}")
+        self.strategy.log("******* Start Training *******")
+        self.strategy.log(f"  Num Epochs:            {self.epochs}")
+        self.strategy.log(f"  Steps per Epoch:       {self.num_update_steps_per_epoch}")
+        self.strategy.log(f"  Total Training Steps:  {total_steps}")
+        self.strategy.log(f"  Per-device Batch Size: {self.args.train.micro_train_batch_size}")
+        self.strategy.log(f"  Gradient Accumulation: {grad_accum}")
+        self.strategy.log(f"  Learning Rate:         {self.args.train.learning_rate}")
     
     def fit(self, global_step=0, start_epoch=0):
         # get eval and save steps
