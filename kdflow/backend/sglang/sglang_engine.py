@@ -12,6 +12,8 @@ from sglang.srt.entrypoints.engine import Engine as _SglEngine
 from sglang.srt.managers.scheduler import run_scheduler_process as _original_run_scheduler_process
 
 
+os.environ["SGLANG_JIT_DEEPGEMM_FAST_WARMUP"] = "true"
+
 def _patched_run_scheduler_process(*args, **kwargs):
     try:
         from kdflow.backend.sglang.monkey_patch import apply_patch
