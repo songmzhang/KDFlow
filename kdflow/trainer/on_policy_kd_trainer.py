@@ -336,9 +336,15 @@ class OnPolicyKDTrainer:
         full_tok = processor(**full_input, return_tensors="pt", add_special_tokens=False)
         resp_len = full_tok["input_ids"].shape[1] - prompt_len
 
-        input_ids = full_tok["input_ids"][0]
-        attn_mask = full_tok["attention_mask"][0]
-        loss_mask = torch.tensor([False] * (prompt_len - 1) + [True] * (resp_len + 1))
+        # since sglang generated response does not contain eos token, we need to add it manually
+        tokenizer = getattr(processor, "tokenizer", processor)
+        eos_token_id = tokenizer.eos_token_id
+        input_ids = torch.cat([full_tok["input_ids"][0], full_tok["input_ids"][0].new_tensor([eos_token_id])])
+        attn_mask = torch.cat([full_tok["attention_mask"][0], full_tok["attention_mask"][0].new_ones(1)])
+        loss_mask = torch.tensor(
+            [False] * (prompt_len - 1) + [True] * (resp_len + 1) + [False],
+            device=input_ids.device,
+        )
 
         result = {
             f"{prefix}_input_ids": input_ids,
@@ -398,7 +404,8 @@ class OnPolicyKDTrainer:
         total_length = stu_tokens["stu_attn_mask"].float().sum()
         
         # Build tea_full_text for teacher actor (SGLang engine uses raw text)
-        tea_full_text = tea_prompt + response_text
+        tokenizer = getattr(self.teacher_processor, "tokenizer", self.teacher_processor)
+        tea_full_text = tea_prompt + response_text + " " + tokenizer.eos_token
 
         sample = {
             **tea_tokens,

@@ -4,7 +4,10 @@ import torch.nn.functional as F
 from kdflow.loss import build_loss_fn
 from kdflow.algorithms import register_algorithm
 from kdflow.loss.cross_entropy import compute_cross_entropy
+from kdflow.utils.logging_utils import init_logger
 
+
+logger = init_logger(__name__)
 
 @register_algorithm("simple_ctkd")
 class SimpleCrossTokenizerKD:
@@ -40,7 +43,7 @@ class SimpleCrossTokenizerKD:
             student_ids.append(stu_eos)
             teacher_ids.append(tea_eos)
         device = self.teacher_lm_head.weight.device
-        self.strategy.log(f"Num of overlap_tokens between student & teacher: {len(student_ids)}")
+        logger.info(f"Num of overlap_tokens between student & teacher: {len(student_ids)}")
         return torch.tensor(student_ids, dtype=torch.long, device=device), torch.tensor(teacher_ids, dtype=torch.long, device=device)
     
     def _align_sequences(self, tea_seq, stu_seq):
