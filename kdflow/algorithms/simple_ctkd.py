@@ -40,6 +40,7 @@ class SimpleCrossTokenizerKD:
             student_ids.append(stu_eos)
             teacher_ids.append(tea_eos)
         device = self.teacher_lm_head.weight.device
+        self.strategy.log(f"Num of overlap_tokens between student & teacher: {len(student_ids)}")
         return torch.tensor(student_ids, dtype=torch.long, device=device), torch.tensor(teacher_ids, dtype=torch.long, device=device)
     
     def _align_sequences(self, tea_seq, stu_seq):
