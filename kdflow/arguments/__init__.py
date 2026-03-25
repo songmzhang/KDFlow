@@ -79,13 +79,22 @@ def init_args():
             )
             args.data.packing_samples = False
             
+    total_gpus = args.train.num_nodes * args.train.num_gpus_per_node
+    
     if args.rollout.rollout_num_engines > 0:
-        if args.rollout.rollout_num_engines * args.rollout.rollout_tp_size < args.train.num_nodes * args.train.num_gpus_per_node:
-            args.rollout.rollout_num_engines = args.train.num_nodes * args.train.num_gpus_per_node // args.rollout.rollout_tp_size
-            logger.warning(
-                "rollout_num_engines * rollout_tp_size is less than total GPUs. "
-                f"Automatically increase rollout_num_engines to {args.rollout.rollout_num_engines}."
+        if total_gpus % args.rollout.rollout_tp_size != 0:
+            raise ValueError(
+                f"Total GPUs ({total_gpus}) must be divisible by rollout_tp_size ({args.rollout.rollout_tp_size})."
             )
+            
+        expected_num_engines = total_gpus // args.rollout.rollout_tp_size
+        if args.rollout.rollout_num_engines != expected_num_engines:
+            logger.warning(
+                f"Auto-adjusting rollout_num_engines from {args.rollout.rollout_num_engines} to {expected_num_engines} "
+                f"to match total GPUs ({total_gpus}). "
+                f"(rollout_tp_size={args.rollout.rollout_tp_size} * rollout_num_engines={expected_num_engines} = {total_gpus})"
+            )
+            args.rollout.rollout_num_engines = expected_num_engines
             
         if args.data.max_len < args.data.prompt_max_len + args.rollout.generate_max_len:
             args.data.max_len = args.data.prompt_max_len + args.rollout.generate_max_len
@@ -94,7 +103,28 @@ def init_args():
                 f"Automatically increase --max_len to {args.data.max_len}."
             )
     
-    # Validate teacher parallelism settings against available GPUs
-    args.kd.validate_teacher_parallelism(args.train.num_nodes, args.train.num_gpus_per_node)
+    if args.model.teacher_name_or_path is not None:
+        teacher_parallel = args.kd.teacher_tp_size * args.kd.teacher_pp_size
+        if total_gpus % teacher_parallel != 0:
+            raise ValueError(
+                f"Total GPUs ({total_gpus}) must be divisible by "
+                f"teacher_tp_size * teacher_pp_size ({args.kd.teacher_tp_size} * {args.kd.teacher_pp_size} = {teacher_parallel})."
+            )
+            
+        if args.kd.teacher_ep_size > args.kd.teacher_tp_size:
+            logger.warning(
+                f"teacher_ep_size ({args.kd.teacher_ep_size}) must not be greater than teacher_tp_size ({args.kd.teacher_tp_size}). "
+                f"Auto-adjusting teacher_ep_size to {args.kd.teacher_tp_size}."
+            )
+            args.kd.teacher_ep_size = args.kd.teacher_tp_size
+            
+        expected_dp = total_gpus // teacher_parallel
+        if args.kd.teacher_dp_size != expected_dp:
+            logger.warning(
+                f"Auto-adjusting teacher_dp_size from {args.kd.teacher_dp_size} to {expected_dp} "
+                f"to match total GPUs ({total_gpus}). "
+                f"(tp={args.kd.teacher_tp_size} (ep={args.kd.teacher_ep_size}) * pp={args.kd.teacher_pp_size} * dp={expected_dp} = {total_gpus})"
+            )
+            args.kd.teacher_dp_size = expected_dp
     
     return args

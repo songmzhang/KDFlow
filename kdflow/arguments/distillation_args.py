@@ -119,23 +119,4 @@ class DistillationArguments:
         if not 0.0 < self.teacher_mem_fraction_static <= 1.0:
             raise ValueError(f"teacher_mem_fraction_static must be in (0, 1], got {self.teacher_mem_fraction_static}.")
 
-    def validate_teacher_parallelism(self, num_nodes: int, num_gpus_per_node: int):
-        total_gpus = num_nodes * num_gpus_per_node
-        total_parallel = self.teacher_tp_size * self.teacher_pp_size
 
-        # tp * ep * pp must evenly divide total GPUs
-        if total_gpus % total_parallel != 0:
-            raise ValueError(
-                f"teacher_tp_size * teacher_ep_size * teacher_pp_size ({self.teacher_tp_size} * {self.teacher_ep_size} * {self.teacher_pp_size} = {total_parallel}) "
-                f"must evenly divide num_nodes * num_gpus_per_node ({num_nodes} * {num_gpus_per_node} = {total_gpus})."
-            )
-
-        # Auto-adjust dp_size if tp * pp * dp != total_gpus
-        expected_dp = total_gpus // total_parallel
-        if self.teacher_dp_size != expected_dp:
-            logger.warning(
-                f"Auto-adjusting teacher_dp_size from {self.teacher_dp_size} to {expected_dp} "
-                f"to match total GPUs ({total_gpus} = {num_nodes} nodes * {num_gpus_per_node} gpus/node). "
-                f"(tp={self.teacher_tp_size} (ep={self.teacher_ep_size}) * pp={self.teacher_pp_size} * dp={expected_dp} = {total_gpus})"
-            )
-            self.teacher_dp_size = expected_dp
