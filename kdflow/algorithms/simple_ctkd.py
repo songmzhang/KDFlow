@@ -33,9 +33,14 @@ class SimpleCrossTokenizerKD:
         student_vocab = {k.replace("Ġ", "▁"): v for k, v in self.student_tokenizer.get_vocab().items()}
         teacher_vocab = {k.replace("Ġ", "▁"): v for k, v in self.teacher_tokenizer.get_vocab().items()}
         overlap_tokens = set(student_vocab.keys()) & set(teacher_vocab.keys())
-        student_overlap_token_ids = torch.tensor([student_vocab[token] for token in overlap_tokens], dtype=torch.long, device=self.teacher_lm_head.weight.device)
-        teacher_overlap_token_ids = torch.tensor([teacher_vocab[token] for token in overlap_tokens], dtype=torch.long, device=self.teacher_lm_head.weight.device)
-        return student_overlap_token_ids, teacher_overlap_token_ids
+        student_ids = [student_vocab[token] for token in overlap_tokens]
+        teacher_ids = [teacher_vocab[token] for token in overlap_tokens]
+        stu_eos, tea_eos = self.student_tokenizer.eos_token_id, self.teacher_tokenizer.eos_token_id
+        if stu_eos not in student_ids or tea_eos not in teacher_ids:
+            student_ids.append(stu_eos)
+            teacher_ids.append(tea_eos)
+        device = self.teacher_lm_head.weight.device
+        return torch.tensor(student_ids, dtype=torch.long, device=device), torch.tensor(teacher_ids, dtype=torch.long, device=device)
     
     def _align_sequences(self, tea_seq, stu_seq):
         i, j = 0, 0
