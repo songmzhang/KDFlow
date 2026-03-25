@@ -159,12 +159,12 @@ class OnPolicyKDTrainer:
                 self.log_state["rollout_time"].append(rollout_time)
 
                 teacher_start = time.time()
-                if self.args.kd.teacher_enable_sleep:
+                if self.args.train.enable_sleep:
                     self.teacher.wakeup()
                     
                 rollout_samples_for_kd = self.teacher.forward(rollout_samples)
                 
-                if self.args.kd.teacher_enable_sleep:
+                if self.args.train.enable_sleep:
                     self.teacher.sleep()
                 self.log_state["teacher_fwd_time"].append(time.time() - teacher_start)
                 
@@ -180,7 +180,7 @@ class OnPolicyKDTrainer:
                 
                 student_start = time.time()
                 
-                if self.args.train.train_enable_sleep:
+                if self.args.train.enable_sleep:
                     self.student.wakeup()
                 
                 for global_batch in all_global_batches:
@@ -190,15 +190,15 @@ class OnPolicyKDTrainer:
                         
                 self.log_state["student_train_time"].append(time.time() - student_start)
                 
-                if self.args.train.train_enable_sleep:
+                if self.args.train.enable_sleep:
                     self.student.sleep()
                 
-                if self.args.rollout.rollout_enable_sleep:
+                if self.args.train.enable_sleep:
                     self.rollout_group.wakeup(tags=["weights"])
                 update_start = time.time()
                 self.student.update_rollout_weights()
                 self.log_state["weight_update_time"].append(time.time() - update_start)
-                if self.args.rollout.rollout_enable_sleep:
+                if self.args.train.enable_sleep:
                     self.rollout_group.sleep(tags=["weights"])
                     
                 self.logging()
@@ -224,7 +224,7 @@ class OnPolicyKDTrainer:
         Returns:
             List of rollout sample dicts containing generated samples
         """
-        if self.args.rollout.rollout_enable_sleep:
+        if self.args.train.enable_sleep:
             self.rollout_group.wakeup()
 
         # Extract prompts and labels from batch
@@ -262,7 +262,7 @@ class OnPolicyKDTrainer:
         
         micro_batch_list = self._collate_micro_batches(sample_list, self.args.train.micro_train_batch_size)
         
-        if self.args.rollout.rollout_enable_sleep:
+        if self.args.train.enable_sleep:
             self.rollout_group.sleep()
 
         return micro_batch_list

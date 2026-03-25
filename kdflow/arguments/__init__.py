@@ -127,4 +127,16 @@ def init_args():
             )
             args.kd.teacher_dp_size = expected_dp
     
+    deprecated_sleep_flags = [
+        args.train.train_enable_sleep,
+        args.kd.teacher_enable_sleep,
+        args.rollout.rollout_enable_sleep,
+    ]
+    if any(deprecated_sleep_flags):
+        logger.warning(
+            "--train_enable_sleep, --teacher_enable_sleep, --rollout_enable_sleep are deprecated "
+            "and will be removed in a future version. Use --enable_sleep instead."
+        )
+        args.train.enable_sleep = True
+    
     return args

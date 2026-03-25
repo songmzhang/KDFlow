@@ -148,7 +148,7 @@ class OffPolicyKDTrainer:
                 
                 # ===== Teacher Phase (batch N global batches) =====
                 teacher_start = time.time()
-                if self.args.kd.teacher_enable_sleep:
+                if self.args.train.enable_sleep:
                     self.teacher.wakeup()
                 
                 # Concat all global batches for teacher forward
@@ -159,13 +159,13 @@ class OffPolicyKDTrainer:
                 for i, gb in enumerate(all_global_batches):
                     all_global_batches[i] = merged_batch[idx:idx + len(gb)]
                     idx += len(gb)
-                if self.args.kd.teacher_enable_sleep:
+                if self.args.train.enable_sleep:
                     self.teacher.sleep()
                 
                 teacher_step_fwd_time = (time.time() - teacher_start) / len(all_global_batches)
 
                 # ===== Student Phase (train N steps) =====
-                if self.args.train.train_enable_sleep:
+                if self.args.train.enable_sleep:
                     self.student.wakeup()
                 for global_batch in all_global_batches:
                     student_start = time.time()
@@ -177,7 +177,7 @@ class OffPolicyKDTrainer:
                     self.log_state["student_step_train_time"].append((time.time() - student_start))
                     self.logging()
                 
-                if self.args.train.train_enable_sleep:
+                if self.args.train.enable_sleep:
                     self.student.sleep()
                 
             self.strategy.log(f"Saving model after epoch {epoch + 1}")

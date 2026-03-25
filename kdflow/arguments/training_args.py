@@ -77,7 +77,11 @@ class TrainingArguments:
     )
     train_enable_sleep: bool = field(
         default=False,
-        metadata={"help": "Offload the student & teacher models to CPU when not needed."}
+        metadata={"help": "[Deprecated] Use --enable_sleep instead."}
+    )
+    enable_sleep: bool = field(
+        default=False,
+        metadata={"help": "Enable sleep mode for all components (student, teacher, rollout)."}
     )
     full_determinism: bool = field(
         default=False,
