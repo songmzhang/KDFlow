@@ -1,3 +1,4 @@
+import time
 from itertools import chain
 from typing import Optional, Tuple, Union
 
@@ -160,9 +161,16 @@ class TeacherActorGroup:
         raw_results = [None] * len(futures)
         future_to_idx = {f: i for i, f in enumerate(futures)}
         
+        fwd_start = time.time()
+        wait_count = 0
         while pending:
-            ready, pending = ray.wait(pending, num_returns=1, timeout=60)
+            ready, pending = ray.wait(pending, num_returns=1, timeout=120)
+            wait_count += 1
             if not ready:
+                elapsed = time.time() - fwd_start
+                logger.warning(f"[TeacherActorGroup.forward] ray.wait timeout #{wait_count}, "
+                               f"elapsed={elapsed:.1f}s, pending_actors={len(pending)}, "
+                               f"pending_indices={[future_to_idx[f] for f in pending]}")
                 continue
             for ref in ready:
                 idx = future_to_idx[ref]
