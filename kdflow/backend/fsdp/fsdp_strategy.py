@@ -94,10 +94,12 @@ class FSDP2Strategy(ABC):
         self.sp_size = self.args.model.ring_attn_size
         dp_size = self.world_size // self.sp_size
         if self.args.fsdp.fsdp_size > -1:
-            assert dp_size % self.args.fsdp.fsdp_size == 0
-            assert dp_size >= self.args.fsdp.fsdp_size
-            dp_replicate = dp_size // self.args.fsdp.fsdp_size
-            dp_sharded = self.args.fsdp.fsdp_size
+            assert self.world_size % self.args.fsdp.fsdp_size == 0
+            assert self.world_size >= self.args.fsdp.fsdp_size
+            assert self.args.fsdp.fsdp_size >= self.sp_size
+            assert self.args.fsdp.fsdp_size % self.sp_size == 0
+            dp_replicate = self.world_size // self.args.fsdp.fsdp_size
+            dp_sharded = self.args.fsdp.fsdp_size // self.sp_size
             self.device_mesh = init_device_mesh(
                 "cuda", (dp_replicate, dp_sharded, self.sp_size), mesh_dim_names=("dp_replicate", "dp_sharded", "sp")
             )
@@ -236,9 +238,9 @@ class FSDP2Strategy(ABC):
         self.offload_policy = CPUOffloadPolicy(pin_memory=True) if self.args.fsdp.cpu_offload else None
         
         if self.args.fsdp.fsdp_size > -1:
-            self.fsdp_mesh = self.device_mesh["dp_replicate", "dp_sharded"]
+            self.fsdp_mesh = self.device_mesh["dp_sharded", "sp"]
         else:
-            self.fsdp_mesh = self.device_mesh["dp"]
+            self.fsdp_mesh = self.device_mesh["dp", "sp"]
         
         self.fsdp_kwargs = {
             "mesh": self.fsdp_mesh,
