@@ -54,9 +54,11 @@ class TeacherActorGroup:
         """
         logger.info("[TeacherActorGroup] Starting initialization...")
         self.teacher_engines = []
+        self._worker_actors = []
         self.strategy = strategy
         self.dp_size = strategy.args.kd.teacher_dp_size
         self.tp_size = strategy.args.kd.teacher_tp_size
+        self.pp_size = strategy.args.kd.teacher_pp_size
         self.num_gpus_per_node = num_gpus_per_node
         
         # Parse PG info (same pattern as RolloutActorGroup)
@@ -64,7 +66,7 @@ class TeacherActorGroup:
             self._pg, self._reordered_bundle_indices, self._reordered_gpu_ids = pg
         elif pg is not None:
             self._pg = pg
-            total_gpus = self.dp_size * self.tp_size
+            total_gpus = self.dp_size * self.tp_size * self.pp_size
             self._reordered_bundle_indices = list(range(total_gpus))
             self._reordered_gpu_ids = list(range(total_gpus))
         else:
@@ -73,12 +75,12 @@ class TeacherActorGroup:
             self._reordered_gpu_ids = None
         
         # Validate configuration
-        required_gpus = self.dp_size * self.tp_size
+        required_gpus = self.dp_size * self.tp_size * self.pp_size
         if required_gpus > num_gpus:
-            raise ValueError(f"Teacher requires {required_gpus} GPUs (dp={self.dp_size} * tp={self.tp_size}) "
+            raise ValueError(f"Teacher requires {required_gpus} GPUs (dp={self.dp_size} * tp={self.tp_size} * pp={self.pp_size}) "
                            f"but only {num_gpus} GPUs available")
         
-        logger.info(f"[TeacherActorGroup] Creating {self.dp_size} actors with tp_size={self.tp_size}")
+        logger.info(f"[TeacherActorGroup] Creating {self.dp_size} actors with tp_size={self.tp_size} * pp_size={self.pp_size}")
         
         self._create_actors(num_gpus_per_actor)
         
@@ -92,39 +94,102 @@ class TeacherActorGroup:
             name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
         }
         
-        num_gpu_per_engine = min(self.tp_size, self.num_gpus_per_node)
+        num_gpu_per_engine = self.tp_size * self.pp_size
+        nnodes_per_engine = max(num_gpu_per_engine // self.num_gpus_per_node, 1)
         
         for i in range(self.dp_size):
-            # Calculate base_gpu_id from PG topology (same as RolloutActorGroup)
-            if self._reordered_gpu_ids is not None:
-                base_gpu_id = int(self._reordered_gpu_ids[i * num_gpu_per_engine])
+            if nnodes_per_engine > 1:  # multi-node tp/pp
+                dist_init_addr = self._get_dist_init_addr(i, num_gpu_per_engine)
+                engine_actors = []
+                for node_idx in range(nnodes_per_engine):
+                    gpu_offset = i * num_gpu_per_engine + node_idx * self.num_gpus_per_node
+
+                    if self._reordered_gpu_ids is not None:
+                        base_gpu_id = int(self._reordered_gpu_ids[gpu_offset])
+                    else:
+                        base_gpu_id = 0
+                    
+                    bundle_idx = self._reordered_bundle_indices[gpu_offset] if self._reordered_bundle_indices else gpu_offset
+                    
+                    options = {
+                        "num_cpus": num_gpus_per_actor,
+                        "num_gpus": num_gpus_per_actor,
+                        "max_concurrency": 2,
+                        "runtime_env": {"env_vars": env_vars},
+                    }
+                    
+                    if self._pg is not None:
+                        options["scheduling_strategy"] = PlacementGroupSchedulingStrategy(
+                            placement_group=self._pg,
+                            placement_group_capture_child_tasks=True,
+                            placement_group_bundle_index=bundle_idx,
+                        )
+                    
+                    actor = TeacherRayActor.options(**options).remote(
+                        self.strategy, 
+                        base_gpu_id=base_gpu_id,
+                        nnodes=nnodes_per_engine,
+                        node_rank=node_idx,
+                        dist_init_addr=dist_init_addr,
+                    )
+                    engine_actors.append(actor)
+                
+                self.teacher_engines.append(engine_actors[0])
+                self._worker_actors.extend(engine_actors[1:])
             else:
-                base_gpu_id = (i * num_gpu_per_engine) % self.num_gpus_per_node
-            
-            logger.info(f"[TeacherActorGroup] Launching actor {i} with base_gpu_id={base_gpu_id}...")
-            
-            options = {
-                "num_cpus": num_gpus_per_actor,
-                "num_gpus": num_gpus_per_actor,
-                "max_concurrency": 2,
-                "runtime_env": {
-                    "env_vars": env_vars,
-                },
-            }
-            
-            # Schedule on PG bundle if available
-            if self._pg is not None and self._reordered_bundle_indices is not None:
-                options["scheduling_strategy"] = PlacementGroupSchedulingStrategy(
-                    placement_group=self._pg,
-                    placement_group_capture_child_tasks=True,
-                    placement_group_bundle_index=self._reordered_bundle_indices[i * num_gpu_per_engine],
-                )
-            
-            actor = TeacherRayActor.options(**options).remote(self.strategy, base_gpu_id)
-            
-            self.teacher_engines.append(actor)
+                # Calculate base_gpu_id from PG topology (same as RolloutActorGroup)
+                if self._reordered_gpu_ids is not None:
+                    base_gpu_id = int(self._reordered_gpu_ids[i * num_gpu_per_engine])
+                else:
+                    base_gpu_id = (i * num_gpu_per_engine) % self.num_gpus_per_node
+                
+                logger.info(f"[TeacherActorGroup] Launching actor {i} with base_gpu_id={base_gpu_id}...")
+                
+                options = {
+                    "num_cpus": num_gpus_per_actor,
+                    "num_gpus": num_gpus_per_actor,
+                    "max_concurrency": 2,
+                    "runtime_env": {
+                        "env_vars": env_vars,
+                    },
+                }
+                
+                # Schedule on PG bundle if available
+                if self._pg is not None and self._reordered_bundle_indices is not None:
+                    options["scheduling_strategy"] = PlacementGroupSchedulingStrategy(
+                        placement_group=self._pg,
+                        placement_group_capture_child_tasks=True,
+                        placement_group_bundle_index=self._reordered_bundle_indices[i * num_gpu_per_engine],
+                    )
+                
+                actor = TeacherRayActor.options(**options).remote(self.strategy, base_gpu_id)
+                
+                self.teacher_engines.append(actor)
             logger.info(f"[TeacherActorGroup] Actor {i} created, waiting for ready...")
     
+    def _get_dist_init_addr(self, engine_idx: int, num_gpu_per_engine: int) -> str:
+        offset = engine_idx * num_gpu_per_engine
+        bundle_idx = self._reordered_bundle_indices[offset] if self._reordered_bundle_indices else offset
+
+        @ray.remote(num_cpus=0, num_gpus=0)
+        def _get_node_ip_and_free_port():
+            import socket
+            ip = ray.util.get_node_ip_address()
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("", 0))
+                port = s.getsockname()[1]
+            return ip, port
+
+        ip, port = ray.get(
+            _get_node_ip_and_free_port.options(
+                scheduling_strategy=PlacementGroupSchedulingStrategy(
+                    placement_group=self._pg,
+                    placement_group_bundle_index=bundle_idx,
+                )
+            ).remote()
+        )
+        return f"{ip}:{port}"
+
     def forward(self, global_batch):
         """
         Perform forward pass (prefilling) on all teacher actors in parallel.
@@ -186,15 +251,19 @@ class TeacherActorGroup:
         
         return results
     
+    @property
+    def _all_actors(self):
+        return self.teacher_engines + self._worker_actors
+
     def sleep(self):
         """Release GPU memory on all teacher engines."""
-        ray.get([actor.sleep.remote() for actor in self.teacher_engines])
+        ray.get([actor.sleep.remote() for actor in self._all_actors])
     
     def wakeup(self):
         """Resume GPU memory on all teacher engines."""
-        ray.get([actor.wakeup.remote() for actor in self.teacher_engines])
+        ray.get([actor.wakeup.remote() for actor in self._all_actors])
         
     def shutdown(self):
         """Shutdown all teacher engines."""
-        ray.get([actor.shutdown.remote() for actor in self.teacher_engines])
-        logger.info("[TeacherActorGroup] All teacher actors shutdown complete.") 
+        ray.get([actor.shutdown.remote() for actor in self._all_actors])
+        logger.info("[TeacherActorGroup] All teacher actors shutdown complete.")

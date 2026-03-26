@@ -22,7 +22,7 @@ class TeacherRayActor:
     - This allows Teacher and Student to share the same GPUs via PlacementGroup
     """
     
-    def __init__(self, strategy, base_gpu_id: int = 0):
+    def __init__(self, strategy, base_gpu_id: int = 0, nnodes: int = 1, node_rank: int = 0, dist_init_addr: str = None):
         """
         Initialize TeacherRayActor.
         
@@ -30,6 +30,9 @@ class TeacherRayActor:
             strategy: Training strategy containing configuration args
             base_gpu_id: Base GPU device ID for SGLang Engine binding (e.g., 0, 1, 2, ...)
                         Used with RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES for PG co-location.
+            nnodes: Number of nodes for multi-node tp/pp
+            node_rank: Rank of this node in tp+pp group
+            dist_init_addr: Address for distributed initialization
         """
         logger.info(f"[TeacherRayActor] __init__ STARTED, PID={os.getpid()}, base_gpu_id={base_gpu_id}")
         
@@ -58,6 +61,9 @@ class TeacherRayActor:
             mem_fraction_static=strategy.args.kd.teacher_mem_fraction_static,
             offload_tags=strategy.args.kd.teacher_offload_tags,
             base_gpu_id=self.base_gpu_id,
+            nnodes=nnodes,
+            node_rank=node_rank,
+            dist_init_addr=dist_init_addr,
         )
         
         # Initialize SGLang Engine service (runs in subprocess)
