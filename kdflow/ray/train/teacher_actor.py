@@ -41,6 +41,7 @@ class TeacherRayActor:
         self.ep_size = strategy.args.kd.teacher_ep_size
         self.pp_size = strategy.args.kd.teacher_pp_size
         self.base_gpu_id = base_gpu_id
+        self.node_rank = node_rank
         
         # Disable tokenizers parallelism to avoid deadlock with multiprocessing
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -70,7 +71,7 @@ class TeacherRayActor:
         self.engine_service = SGLangEngineService(self.engine_config)
         self.engine_service.start()
         
-        if self.strategy.args.train.enable_sleep:
+        if self.strategy.args.train.enable_sleep and self.node_rank == 0:
             logger.info(f"[TeacherRayActor] Teacher sleep after initialization")
             self.engine_service.sleep(tags=self.strategy.args.kd.teacher_offload_tags)
         

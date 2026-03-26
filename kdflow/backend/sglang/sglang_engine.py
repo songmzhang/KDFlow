@@ -55,6 +55,8 @@ class EngineConfig:
 
 def _engine_worker(config: EngineConfig, request_queue: Queue, response_queue: Queue):
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    if config.nnodes > 1:
+        os.environ["SGLANG_BLOCK_NONZERO_RANK_CHILDREN"] = "0"
 
     engine = None
     zmq_ctx = None
