@@ -261,5 +261,5 @@ class TeacherActorGroup:
         
     def shutdown(self):
         """Shutdown all teacher engines."""
-        ray.get([actor.shutdown.remote() for actor in self.teacher_engines])
+        ray.get([actor.shutdown.remote() for actor in self.teacher_engines + self._worker_actors])
         logger.info("[TeacherActorGroup] All teacher actors shutdown complete.")
