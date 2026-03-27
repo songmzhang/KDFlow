@@ -15,6 +15,7 @@
 
 ## 📰 News
 
+- **[2026/03]** 💬 We have created a KDFlow WeChat group! Welcome to [join us](#-wechat-group) for discussion and communication!
 - **[2026/03]** 🎉 KDFlow v0.1.1 released! Now supports **vision-language (multimodal) models** and **Qwen3.5 series** (as the teacher model).
 
 ---
