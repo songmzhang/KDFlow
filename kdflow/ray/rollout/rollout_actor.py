@@ -211,7 +211,7 @@ class RolloutRayActor:
 
     def shutdown(self):
         """Shutdown the SGLang server subprocess and deregister from the router."""
-        if self.process is None:
+        if not hasattr(self, 'process') or self.process is None:
             return
 
         if self.node_rank == 0:
