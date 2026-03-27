@@ -84,7 +84,11 @@ def process_batch_result_prefill_patched(
                 continue
 
             if req.is_chunked <= 0:
-                req.time_stats.set_prefill_finished_time()
+                if hasattr(req.time_stats, "prefill_finished_ts"):
+                    if req.time_stats.prefill_finished_ts == 0.0:
+                        req.time_stats.prefill_finished_ts = time.time()
+                else:
+                    req.time_stats.set_prefill_finished_time()
 
                 # req output_ids are set here
                 req.output_ids.append(next_token_id)
