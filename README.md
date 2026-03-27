@@ -7,6 +7,7 @@
   [![License](https://img.shields.io/github/license/songmzhang/KDFlow)](LICENSE)
   [![arXiv](https://img.shields.io/badge/arXiv-2603.01875-b31b1b?logo=arxiv)](https://arxiv.org/abs/2603.01875)
   [![Stars](https://img.shields.io/github/stars/songmzhang/KDFlow?style=social)](https://github.com/songmzhang/KDFlow)
+  [![WeChat](https://img.shields.io/badge/WeChat-Group-07C160?logo=wechat&logoColor=white)](#-wechat-group)
 
 </div>
 
@@ -35,6 +36,7 @@
 - [🙏 Acknowledgement](#-acknowledgement)
 - [📖 Citation](#-citation)
 - [📄 License](#-license)
+- [💬 WeChat Group](#-wechat-group)
 - [⭐ Star History](#-star-history)
 
 ---
@@ -324,6 +326,7 @@ The `TeacherActorGroup` uses a **greedy token-based load balancing** strategy to
 
 KDFlow is built upon the shoulders of outstanding open-source projects. We sincerely thank:
 
+- [SGLang](https://github.com/sgl-project/sglang) — We deeply appreciate its support for extracting hidden states from model inference and its exceptional inference efficiency, which are critical to KDFlow's teacher inference pipeline.
 - [OpenRLHF](https://github.com/OpenRLHF/OpenRLHF) — We gratefully adopt its well-designed abstractions for model wrapping and distributed training strategy, which form the foundation of our training infrastructure.
 - [slime](https://github.com/THUDM/slime) — We appreciate its elegant implementation of Ray placement group initialization and the weight update mechanism for SGLang, which greatly inspired our design of on-policy distillation.
 
@@ -350,6 +353,16 @@ If you find KDFlow useful in your research or work, please consider citing our p
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
+
+---
+
+## 💬 WeChat Group
+
+Welcome to join our WeChat group for discussion and communication!
+
+<p align="center">
+  <img src="figures/wechat.jpg" alt="WeChat Group QR Code" width="300">
+</p>
 
 ---
 
