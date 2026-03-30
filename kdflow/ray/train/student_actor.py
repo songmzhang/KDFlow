@@ -163,7 +163,7 @@ class StudentRayActor:
             self.checkpoint_states["data_loader_state_dict"] = states["data_loader_state_dict"]
 
         # initial offload
-        if self.args.train.train_enable_sleep:
+        if self.args.train.enable_sleep:
             self.sleep()
 
         torch_dist_barrier_and_cuda_sync()
