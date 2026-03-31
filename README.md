@@ -16,7 +16,7 @@
 ## 🔥 News
 
 - **[2026/03]** 💬 We have created a KDFlow WeChat group! Welcome to [join us](#-wechat-group) for discussion and communication!
-- **[2026/03]** 🎉 KDFlow v0.1.1 released! Now supports **vision-language (multimodal) models** and **Qwen3.5 series** (as the teacher model).
+- **[2026/03]** 🎉 KDFlow v0.1.1 released! Now supports **vision-language (multimodal) models** and **Qwen3.5 series**.
 
 ---
 
@@ -73,9 +73,11 @@
 git clone https://github.com/songmzhang/KDFlow.git
 cd KDFlow
 pip install -e ./
+# install flash attention after torch installation
+pip install flash_attn==2.8.3 --no-build-isolation
 ```
 
-> Since SGLang 0.5.9 does not support transformers v5, please use transformers v4.57.1 to ensure correct teacher computation.
+> To support Qwen3.5, please use the latest version of SGLang which supports transformers v5.3.0.
 
 ### Off-Policy Knowledge Distillation
 LLMs:

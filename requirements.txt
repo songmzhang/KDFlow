@@ -1,6 +1,6 @@
-sglang==0.5.9
+sglang
 torch>=2.4
-transformers==4.57.1
+transformers
 numpy
 ray>=2.0
 sglang_router
@@ -15,5 +15,5 @@ wandb
 triton
 ring_flash_attn
 
-# install flash_attn after torch installation
-# flash_attn
+# install flash_attn after torch installation:
+# pip install flash_attn==2.8.3 --no-build-isolation
