@@ -16,7 +16,7 @@ OPTS+=" --num_epochs 1"
 OPTS+=" --save_path ./output/qwen3_vl_30b_a3b_to_4b"
 OPTS+=" --bf16 True"
 OPTS+=" --gradient_checkpointing True"
-OPTS+=" --train_enable_sleep True"
+OPTS+=" --enable_sleep True"
 
 # ============ ModelArguments ============
 OPTS+=" --student_name_or_path Qwen/Qwen3-VL-4B-Instruct"
@@ -40,7 +40,6 @@ OPTS+=" --teacher_forward_n_batches 10"
 OPTS+=" --teacher_dp_size 2"
 OPTS+=" --teacher_tp_size 4"
 OPTS+=" --teacher_mem_fraction_static 0.6"
-OPTS+=" --teacher_enable_sleep True"
 
 # ============ LoggingArguments ============
 OPTS+=" --logging_steps 10"

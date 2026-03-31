@@ -17,7 +17,7 @@ OPTS+=" --num_epochs 1"
 OPTS+=" --save_path ./output/qwen3_30b_a3b_to_llama3.2_3b"
 OPTS+=" --bf16 True"
 OPTS+=" --gradient_checkpointing True"
-OPTS+=" --train_enable_sleep True"
+OPTS+=" --enable_sleep True"
 
 # ============ ModelArguments ============
 OPTS+=" --student_name_or_path meta-llama/Llama3.2-3B-Instruct"
@@ -29,7 +29,6 @@ OPTS+=" --rollout_batch_size 1024"
 OPTS+=" --rollout_num_engines 8"
 OPTS+=" --rollout_tp_size 1"
 OPTS+=" --rollout_mem_fraction_static 0.6"
-OPTS+=" --rollout_enable_sleep True"
 OPTS+=" --n_samples_per_prompt 1"
 
 # ============ DataArguments ============
@@ -50,7 +49,6 @@ OPTS+=" --dskd_projector_lr 5e-4"
 OPTS+=" --teacher_dp_size 2"
 OPTS+=" --teacher_tp_size 4"
 OPTS+=" --teacher_mem_fraction_static 0.6"
-OPTS+=" --teacher_enable_sleep True"
 
 # ============ LoggingArguments ============
 OPTS+=" --logging_steps 10"
