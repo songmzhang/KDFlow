@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kdflow"
-version = "0.1.1"
+version = "0.1.2"
 description = "A scalable knowledge distillation framework for large language models"
 readme = "README.md"
 license = {text = "MIT"}
