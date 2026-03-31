@@ -5,7 +5,6 @@ import logging
 import json
 from abc import ABC
 from typing import Dict, List, Optional, Union
-from collections import defaultdict
 
 import numpy as np
 import ray
@@ -238,24 +237,18 @@ class StudentRayActor:
         logger.info(f"Loaded lm_head ({weight_key}), shape: {lm_head.weight.shape}")
         return lm_head
         
-    def fit(self, train_data, prev_status=None):
+    def fit(self, train_data):
         """
         Train student model with the given data.
         
         Args:
             train_data: List of training samples
-            prev_status: Previous training status dict for accumulation
             
         Returns:
-            Averaged training status dict
+            Training status dict
         """
-        if prev_status is None:
-            prev_status = defaultdict(list)
-            
         self.student.train()
-        
         dataloader = train_data
-            
         device = torch.cuda.current_device()
 
         for batch in dataloader:
@@ -266,21 +259,16 @@ class StudentRayActor:
                 for k, v in batch.items()
             }
             
-            # --- Student Forward ---
-            # Teacher outputs are already in micro_batch["teacher_hiddens"]
             loss_info = self.kd_algorithm.training_step(micro_batch)
             
-            # --- Backward ---
             loss = loss_info["loss"]
             self.strategy.backward(loss, self.student, self.optim)
             
-            # --- Clip projector gradients (not covered by FSDP model's clip_grad_norm_) ---
             if hasattr(self.kd_algorithm, 'get_projector_params'):
                 projector_params = self.kd_algorithm.get_projector_params()
                 if projector_params:
                     torch.nn.utils.clip_grad_norm_(projector_params, max_norm=self.args.train.max_norm)
 
-            # --- Optimizer Step ---
             self.strategy.optimizer_step(self.optim, self.student, self.scheduler)
 
             last_micro_batch = micro_batch
@@ -303,15 +291,11 @@ class StudentRayActor:
             status["grad_norm"] = self.student.clip_grad_norm_(max_norm=self.args.train.max_norm).item()
 
         for key in status:
-            prev_status[key].append(status[key])
-
-        for key in prev_status:
-            prev_status[key] = sum(prev_status[key]) / len(prev_status[key])
-            prev_status[key] = self.strategy.all_reduce(prev_status[key], op="mean")
+            status[key] = self.strategy.all_reduce(status[key], op="mean")
         
         self.empty_cache()
         
-        return prev_status
+        return status
 
     def save_model(self, save_path=None):
         """Save model checkpoint after fitting on only rank0."""

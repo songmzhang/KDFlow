@@ -132,12 +132,11 @@ class StudentActorGroup:
         """
         return [actor.save_model.remote(save_path) for actor in self._actor_handlers]
     
-    def async_run_distill(self, data, status):
+    def async_run_distill(self, data):
         """ Send data to each distill worker and run distillation.
         
         Args: 
             data (list): global batch data
-            status (dict): training status
         Returns:
             List[ray.ObjectRef]: List of remote object references to the results
         """
@@ -158,7 +157,7 @@ class StudentActorGroup:
             for j in range(self.duplicate_actors):
                 actor_idx = chunk_idx * self.duplicate_actors + j
                 actor = self._actor_handlers[actor_idx]
-                refs.append(actor.fit.remote(chunk_ref, prev_status=status))
+                refs.append(actor.fit.remote(chunk_ref))
         return refs
     
     def sleep(self):

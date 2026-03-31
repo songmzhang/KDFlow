@@ -9,7 +9,6 @@ import ray
 import torch
 import torch.distributed as dist
 from tqdm import tqdm
-from collections import defaultdict
 
 from kdflow.utils.logging_utils import init_logger
 
@@ -113,7 +112,6 @@ class OffPolicyKDTrainer:
         self._print_training_config()
         
         self.start_time = time.time()
-        status = defaultdict(list)
         num_micro_batches = self.args.train.train_batch_size // self.args.train.micro_train_batch_size
         self.teacher_forward_n = min(self.args.kd.teacher_forward_n_batches, len(self.train_dataloader))
         teacher_forward_n = self.teacher_forward_n
@@ -170,7 +168,7 @@ class OffPolicyKDTrainer:
                 for global_batch in all_global_batches:
                     student_start = time.time()
                     self.global_step += 1
-                    status_list = ray.get(self.student.async_run_distill(global_batch, status))
+                    status_list = ray.get(self.student.async_run_distill(global_batch))
                     for k in status_list[0].keys():
                         self.log_state[k].append(sum(s[k] for s in status_list) / len(status_list))
                     self.log_state["teacher_step_fwd_time"].append(teacher_step_fwd_time)

@@ -142,7 +142,6 @@ class OnPolicyKDTrainer:
         self.student.connect_rollout_engines(self.rollout_group.actors, rollout_tp_size)
         
         self.start_time = time.time()
-        status = defaultdict(list)
         num_micro_batches = self.args.train.train_batch_size // self.args.train.micro_train_batch_size
         
         for epoch in range(start_epoch, self.epochs):
@@ -184,7 +183,7 @@ class OnPolicyKDTrainer:
                     self.student.wakeup()
                 
                 for global_batch in all_global_batches:
-                    status_list = ray.get(self.student.async_run_distill(global_batch, status))
+                    status_list = ray.get(self.student.async_run_distill(global_batch))
                     for k in status_list[0].keys():
                         self.log_state[k].append(sum(s[k] for s in status_list) / len(status_list))
                         
