@@ -5,6 +5,7 @@ import logging
 import json
 from abc import ABC
 from typing import Dict, List, Optional, Union
+from collections import defaultdict
 
 import numpy as np
 import ray
@@ -248,10 +249,10 @@ class StudentRayActor:
             Training status dict
         """
         self.student.train()
-        dataloader = train_data
         device = torch.cuda.current_device()
+        status = defaultdict(list)
 
-        for batch in dataloader:
+        for batch in train_data:
             micro_batch = {
                 k: torch.from_numpy(v).to(device, non_blocking=True) if isinstance(v, np.ndarray)
                 else v.to(device) if isinstance(v, torch.Tensor)
@@ -260,6 +261,8 @@ class StudentRayActor:
             }
             
             loss_info = self.kd_algorithm.training_step(micro_batch)
+            for key in loss_info:
+                status[key].append(loss_info[key].item())
             
             loss = loss_info["loss"]
             self.strategy.backward(loss, self.student, self.optim)
@@ -269,26 +272,26 @@ class StudentRayActor:
                 if projector_params:
                     torch.nn.utils.clip_grad_norm_(projector_params, max_norm=self.args.train.max_norm)
 
+            status["grad_norm"].append(
+                torch.nn.utils.clip_grad_norm_(
+                    self.student.parameters(), max_norm=float("inf")
+                ).item()
+            )
+
             self.strategy.optimizer_step(self.optim, self.student, self.scheduler)
 
-            last_micro_batch = micro_batch
+            if "response_length" in micro_batch:
+                status["response_length"].append(micro_batch["response_length"].mean().item())
+            if "total_length" in micro_batch:
+                status["total_length"].append(micro_batch["total_length"].mean().item())
+            
             del micro_batch
 
-        status = {}
-        for key in loss_info:
-            status[key] = loss_info[key].item()
+        for key in status:
+            if isinstance(status[key], list) and len(status[key]) > 0:
+                status[key] = sum(status[key]) / len(status[key])
 
         status["lr"] = self.scheduler.get_last_lr()[0]
-        if "response_length" in last_micro_batch:
-            status["gen_len"] = last_micro_batch["response_length"].mean().item()
-        if "total_length" in last_micro_batch:
-            status["tot_len"] = last_micro_batch["total_length"].mean().item()
-        del last_micro_batch
-
-        if hasattr(self.student, "get_global_grad_norm") and self.student.get_global_grad_norm() is not None:
-            status["grad_norm"] = self.student.get_global_grad_norm()
-        elif hasattr(self.student, "clip_grad_norm_"):
-            status["grad_norm"] = self.student.clip_grad_norm_(max_norm=self.args.train.max_norm).item()
 
         for key in status:
             status[key] = self.strategy.all_reduce(status[key], op="mean")
