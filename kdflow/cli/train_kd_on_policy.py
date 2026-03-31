@@ -127,7 +127,7 @@ def train(args):
         )
     
     # Calculate max training steps
-    num_rollout_iters_per_epoch = len(train_dataset) * args.rollout.n_samples_per_prompt // args.rollout.rollout_batch_size
+    num_rollout_iters_per_epoch = len(train_dataset) // args.rollout.rollout_batch_size
     num_update_steps_per_rollout = args.rollout.rollout_batch_size * args.rollout.n_samples_per_prompt // args.train.train_batch_size
     max_rollout_iters = math.ceil(args.train.num_epochs * num_rollout_iters_per_epoch)
     strategy.log(f"Max training iterations: {max_rollout_iters}")
