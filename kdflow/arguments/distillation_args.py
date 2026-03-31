@@ -25,10 +25,6 @@ class DistillationArguments:
         default="kl",
         metadata={"help": "Divergence selection for knowledge distillation, e.g., kl, rkl, js."}
     )
-    use_triton_loss: bool = field(
-        default=False,
-        metadata={"help": "Enable triton kernel for KL (or other) divergence."}
-    )
     teacher_forward_n_batches: int = field(
         default=1,
         metadata={"help": "Teacher forward N global batches at once for student multi-step training."}

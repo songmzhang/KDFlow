@@ -13,7 +13,7 @@
 
 ---
 
-## 📰 News
+## 🔥 News
 
 - **[2026/03]** 💬 We have created a KDFlow WeChat group! Welcome to [join us](#-wechat-group) for discussion and communication!
 - **[2026/03]** 🎉 KDFlow v0.1.1 released! Now supports **vision-language (multimodal) models** and **Qwen3.5 series** (as the teacher model).
@@ -22,6 +22,7 @@
 
 ## 📑 Table of Contents
 
+- [🔥 News](#-news)
 - [✨ Key Features](#-key-features)
 - [🚀 Quick Start](#-quick-start)
   - [Installation](#installation)
@@ -132,7 +133,7 @@ bash ./examples/sft/run_qwen3_4b.sh
 
 ---
 
-## ⚙️ Configuration Reference
+## ⚙️ Arguments
 
 ### Model Arguments
 
@@ -144,8 +145,11 @@ bash ./examples/sft/run_qwen3_4b.sh
 | `--use_liger_kernel` | `False` | Use Liger Kernel for student model |
 | `--lora_rank` | `0` | LoRA rank (0 = disabled) |
 | `--lora_alpha` | `16` | LoRA alpha |
-| `--ring_attn_size` | `1` | Ring attention group size |
+| `--target_modules` | `all-linear` | LoRA target modules |
+| `--lora_dropout` | `0.0` | LoRA dropout |
+| `--ring_attn_size` | `1` | Ring attention group size for context parallelism |
 | `--enable_thinking` | `False` | Enable thinking mode |
+| `--disable_fast_tokenizer` | `False` | Disable fast tokenizer |
 
 ### Training Arguments
 
@@ -159,10 +163,26 @@ bash ./examples/sft/run_qwen3_4b.sh
 | `--learning_rate` | `1e-6` | Learning rate |
 | `--lr_scheduler` | `cosine_with_min_lr` | LR scheduler type |
 | `--lr_warmup_ratio` | `0.05` | Warmup ratio |
+| `--min_lr` | `1e-8` | Minimum learning rate |
 | `--max_norm` | `1.0` | Gradient clipping max norm |
+| `--weight_decay` | `0.0` | Weight decay |
+| `--adam_betas` | `(0.9, 0.98)` | Adam optimizer betas |
 | `--backend` | `fsdp2` | Training backend |
 | `--gradient_checkpointing` | `False` | Enable gradient checkpointing |
+| `--enable_sleep` | `False` | Enable sleep mode for all components (student, teacher, rollout) |
+| `--eval_steps` | `-1` | Evaluate every N steps (-1 = disabled) |
+| `--save_steps` | `-1` | Save checkpoint every N steps (-1 = disabled) |
 | `--save_path` | `./ckpt/` | Model save path |
+| `--ckpt_path` | `./ckpt/checkpoints_distill` | Checkpoint save path |
+| `--seed` | `42` | Random seed |
+| `--bf16` | `False` | Enable bfloat16 training |
+
+### FSDP Arguments
+
+| Argument | Default | Description |
+|---|---|---|
+| `--fsdp_size` | `-1` | FSDP shard size for HSDP (-1 = full sharding) |
+| `--cpu_offload` | `False` | Offload Adam optimizer states to CPU |
 
 ### Distillation Arguments
 
@@ -171,38 +191,57 @@ bash ./examples/sft/run_qwen3_4b.sh
 | `--kd_ratio` | `0.5` | KD loss weight: `loss = (1 - kd_ratio) * CE + kd_ratio * KD` |
 | `--kd_temperature` | `1.0` | Temperature for softmax in KD |
 | `--kd_algorithm` | `vanilla_kd` | KD algorithm (`vanilla_kd` / `dskd`) |
-| `--kd_loss_fn` | `kl` | Divergence function (like `kl` / `rkl` / `jsd`/ `akl`) |
+| `--kd_loss_fn` | `kl` | Divergence function (`kl` / `rkl` / `jsd` / `akl`) |
 | `--teacher_tp_size` | `8` | Teacher tensor parallel size |
-| `--teacher_ep_size` | `1` | Teacher expert parallel size |
+| `--teacher_ep_size` | `1` | Teacher expert parallel size (MoE models) |
 | `--teacher_pp_size` | `1` | Teacher pipeline parallel size |
 | `--teacher_dp_size` | `1` | Teacher data parallel size |
-| `--teacher_enable_sleep` | `False` | Enable teacher sleep/wakeup for GPU sharing |
 | `--teacher_forward_n_batches` | `1` | Teacher forward N batches at once |
 | `--teacher_mem_fraction_static` | `0.4` | SGLang static memory fraction for teacher |
+| `--teacher_offload_tags` | `all` | Offload tags for SGLang |
+| `--teacher_quantization` | `None` | Teacher model quantization |
+| `--dskd_token_align` | `eta` | Token alignment strategy for DSKD (`eta` / `cma`) |
+| `--dskd_topk_vocab` | `-1` | Top-k vocab tokens for DSKD projector init (-1 = all) |
+| `--dskd_projector_lr` | `1e-4` | Learning rate for DSKD projectors |
+| `--jsd_beta` | `0.5` | Beta for Jensen-Shannon Divergence |
+| `--skew_lambda` | `0.1` | Lambda for Skewed KL/RKL |
+| `--adaptive_alpha` | `0.5` | Alpha for Adaptive KL Divergence |
+| `--hrl_topk` | `5` | Top-k for Hierarchical Ranking Loss |
 
 ### Rollout Arguments (On-Policy)
 
 | Argument | Default | Description |
 |---|---|---|
-| `--rollout_num_engines` | `4` | Number of SGLang rollout engines |
-| `--rollout_tp_size` | `2` | Tensor parallel per rollout engine |
+| `--rollout_num_engines` | `0` | Number of SGLang rollout engines (0 = off-policy) |
+| `--rollout_tp_size` | `1` | Tensor parallel per rollout engine |
 | `--rollout_batch_size` | `32` | Prompts per rollout iteration |
 | `--n_samples_per_prompt` | `1` | Number of responses per prompt |
 | `--generate_max_len` | `2048` | Max generation length |
 | `--temperature` | `1.0` | Sampling temperature |
 | `--top_p` | `1.0` | Top-p sampling |
-| `--rollout_enable_sleep` | `False` | Enable rollout sleep/wakeup |
+| `--rollout_mem_fraction_static` | `0.6` | GPU memory utilization per rollout engine |
+| `--print_rollout_sample` | `False` | Print a rollout sample after each rollout |
 
 ### Data Arguments
 
 | Argument | Default | Description |
 |---|---|---|
 | `--train_dataset_path` | `None` | Training dataset path |
-| `--max_len` | `None` | Max sequence length |
+| `--train_dataset_probs` | `None` | Sampling probabilities for multiple datasets |
+| `--train_split` | `train` | Train split name |
+| `--eval_dataset_path` | `None` | Evaluation dataset path |
+| `--eval_split` | `eval` | Eval split name |
 | `--input_key` | `messages` | Dataset input key |
+| `--output_key` | `None` | Dataset output key |
+| `--image_key` | `None` | Image key for multimodal datasets |
+| `--teacher_input_key` | `None` | Input key for teacher prompt (for self-distillation/context distillation) |
+| `--label_key` | `None` | Label key in dataset |
 | `--apply_chat_template` | `True` | Apply tokenizer chat template |
+| `--max_len` | `4096` | Max sequence length |
+| `--prompt_max_len` | `2048` | Max prompt length |
+| `--max_samples` | `1e8` | Max number of samples to load |
 | `--packing_samples` | `False` | Pack sequences for efficiency |
-| `--use_dynamic_batch` | `False` | Dynamic batching by token count |
+| `--preprocess_num_workers` | `8` | Number of workers for data preprocessing |
 
 ### Logging Arguments
 
@@ -210,8 +249,12 @@ bash ./examples/sft/run_qwen3_4b.sh
 |---|---|---|
 | `--logging_steps` | `10` | Log every N steps |
 | `--use_wandb` | `False` | Enable W&B logging |
+| `--wandb_org` | `None` | W&B organization name |
 | `--wandb_project` | `None` | W&B project name |
+| `--wandb_group` | `None` | W&B group name |
 | `--wandb_run_name` | `None` | W&B run name |
+| `--wandb_mode` | `online` | W&B mode (`online` / `offline` / `disabled`) |
+| `--wandb_dir` | `None` | Directory to store W&B offline logs |
 
 ---
 
