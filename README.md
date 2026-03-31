@@ -30,7 +30,7 @@
   - [On-Policy Knowledge Distillation](#on-policy-knowledge-distillation)
   - [Cross-Tokenizer Knowledge Distillation](#cross-tokenizer-knowledge-distillation)
   - [Supervised Fine-Tuning (SFT)](#supervised-fine-tuning-sft)
-- [⚙️ Configuration Reference](#️-configuration-reference)
+- [⚙️ Arguments](#️-arguments)
 - [🧩 Extending KDFlow](#-extending-kdflow)
   - [Adding a Custom KD Algorithm](#adding-a-custom-kd-algorithm)
   - [Adding a Custom KD Loss](#adding-a-custom-kd-loss)
