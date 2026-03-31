@@ -308,11 +308,13 @@ class StudentRayActor:
 
     def wakeup(self):
         """Reload optimizer states from CPU to GPU."""
+        self.strategy.reload_model_params(self.student)
         self.strategy.reload_optim_states(self.optim)
 
     def sleep(self):
         """Offload optimizer states from GPU to CPU to save memory."""
-        self.strategy.offload_optim_states(self.optim, empty_cache=True)
+        self.strategy.offload_optim_states(self.optim)
+        self.strategy.offload_model_params(self.student, empty_cache=True)
 
     def save_checkpoint(self, tag, client_states):
         self.strategy.save_ckpt(

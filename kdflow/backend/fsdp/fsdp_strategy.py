@@ -477,28 +477,30 @@ class FSDP2Strategy(ABC):
         
     @torch.no_grad()
     def offload_optim_states(self, optimizer: Optimizer, empty_cache: bool = True):
-        """将优化器状态一次性卸载到 CPU"""
+        """offload optimizer states to CPU"""
+        if not optimizer.state:
+            return
         for param_group in optimizer.param_groups:
-            for param in param_group['params']:
-                if param in optimizer.state:
-                    state = optimizer.state[param]
-                    for key, value in state.items():
-                        if isinstance(value, torch.Tensor):
-                            state[key] = value.cpu()
+            for param in param_group["params"]:
+                state = optimizer.state[param]
+                for key, value in state.items():
+                    if isinstance(value, torch.Tensor):
+                        state[key] = value.to("cpu", non_blocking=True)
         if empty_cache:
             torch.cuda.empty_cache()
 
     @torch.no_grad()
     def reload_optim_states(self, optimizer: Optimizer):
-        """将优化器状态重新加载到 GPU"""
+        """reload optimizer states to GPU"""
         device = torch.cuda.current_device()
+        if not optimizer.state:
+            return
         for param_group in optimizer.param_groups:
-            for param in param_group['params']:
-                if param in optimizer.state:
-                    state = optimizer.state[param]
-                    for key, value in state.items():
-                        if isinstance(value, torch.Tensor):
-                            state[key] = value.to(device)
+            for param in param_group["params"]:
+                state = optimizer.state[param]
+                for key, value in state.items():
+                    if isinstance(value, torch.Tensor):
+                        state[key] = value.to(device, non_blocking=True)
 
     def update_rollout_weights_from_tensor(
         self, model, engine, gather_src, gather_group,
