@@ -322,21 +322,17 @@ class OnPolicyKDTrainer:
             Dict with ``{prefix}_input_ids``, ``{prefix}_attn_mask``, ``{prefix}_loss_mask``
             and optional multimodal fields.
         """
-        prompt_input = {"text": prompt}
-        if images:
-            prompt_input["images"] = images
-        prompt_tok = processor(**prompt_input, return_tensors="pt", add_special_tokens=False)
-        prompt_len = prompt_tok["input_ids"].shape[1]
-        
+        tokenizer = getattr(processor, "tokenizer", processor)
+        resp_tok = tokenizer(response, return_tensors="pt", add_special_tokens=False)
+        resp_len = resp_tok["input_ids"].shape[1]
+
         full_input = {"text": prompt + response}
         if images:
             full_input["images"] = images
-        # concat before tokenize to avoid tokenization mismatch between trainer and teacher
         full_tok = processor(**full_input, return_tensors="pt", add_special_tokens=False)
-        resp_len = full_tok["input_ids"].shape[1] - prompt_len
+        prompt_len = full_tok["input_ids"].shape[1] - resp_len
 
-        # since sglang generated response does not contain eos token, we need to add it manually
-        tokenizer = getattr(processor, "tokenizer", processor)
+        # since rollout response does not contain eos token, we need to add it manually
         eos_token_id = tokenizer.eos_token_id
         input_ids = torch.cat([full_tok["input_ids"][0], full_tok["input_ids"][0].new_tensor([eos_token_id])])
         attn_mask = torch.cat([full_tok["attention_mask"][0], full_tok["attention_mask"][0].new_ones(1)])
@@ -351,7 +347,7 @@ class OnPolicyKDTrainer:
             f"{prefix}_loss_mask": loss_mask,
         }
         # Extract multimodal fields (e.g., pixel_values, image_grid_thw)
-        for k, v in prompt_tok.items():
+        for k, v in full_tok.items():
             if k not in ("input_ids", "attention_mask"):
                 v = torch.as_tensor(v)
                 result[f"mm_{k}"] = v.squeeze(0) if v.dim() > 2 else v

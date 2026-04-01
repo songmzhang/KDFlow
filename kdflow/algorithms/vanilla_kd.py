@@ -45,9 +45,14 @@ class VanillaKD:
         minV = min(teacher_logits.shape[-1], student_logits.shape[-1])
         teacher_logits = teacher_logits[:, :minV]
         student_logits = student_logits[:, :minV]
-        assert teacher_logits.shape == student_logits.shape, \
-            "teacher_logits must have the same shape with student_logits, " \
-            f"but got teacher: {teacher_logits.shape} and student: {student_logits.shape}."
+        if teacher_logits.shape != student_logits.shape:
+            from transformers import AutoTokenizer
+            _tokenizer = AutoTokenizer.from_pretrained(self.args.student_model_path)
+            _stu_tokens = _tokenizer.convert_ids_to_tokens(student_input_ids[student_loss_mask].cpu().tolist())
+            _tea_tokens = _tokenizer.convert_ids_to_tokens(teacher_input_ids[teacher_loss_mask].cpu().tolist())
+            assert False, \
+                f"teacher: {teacher_logits.shape} vs student: {student_logits.shape}. " \
+                f"student tokens: {_stu_tokens}, teacher tokens: {_tea_tokens}"
         
         kd_loss = self.loss_fn(
             student_logits, 
