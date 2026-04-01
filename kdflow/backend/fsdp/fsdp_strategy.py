@@ -12,7 +12,7 @@ import transformers
 from abc import ABC
 from datetime import timedelta
 from peft import PeftModel, get_peft_model_state_dict
-from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.device_mesh import init_device_mesh, DeviceMesh
 from torch.optim import Optimizer, AdamW
 from torch.distributed.fsdp import (
     fully_shard,
@@ -93,21 +93,18 @@ class FSDP2Strategy(ABC):
         self.world_size = dist.get_world_size()
         self.sp_size = self.args.model.ring_attn_size
         dp_size = self.world_size // self.sp_size
+        self.sp_mesh = init_device_mesh("cuda", (dp_size, self.sp_size), mesh_dim_names=("dp", "sp"))
+        self.setup_ring_attn(self.sp_mesh)
         if self.args.fsdp.fsdp_size > -1:
             assert self.world_size % self.args.fsdp.fsdp_size == 0
             assert self.world_size >= self.args.fsdp.fsdp_size
-            assert self.args.fsdp.fsdp_size >= self.sp_size
-            assert self.args.fsdp.fsdp_size % self.sp_size == 0
-            dp_replicate = self.world_size // self.args.fsdp.fsdp_size
-            dp_sharded = self.args.fsdp.fsdp_size // self.sp_size
-            self.device_mesh = init_device_mesh(
-                "cuda", (dp_replicate, dp_sharded, self.sp_size), mesh_dim_names=("dp_replicate", "dp_sharded", "sp")
-            )
+            replicate = self.world_size // self.args.fsdp.fsdp_size
+            self.fsdp_mesh = init_device_mesh(
+                "cuda", (replicate, self.args.fsdp.fsdp_size), mesh_dim_names=("replicate", "sharded"))
         else:
-            self.device_mesh = init_device_mesh(
-                "cuda", (dp_size, self.sp_size), mesh_dim_names=("dp", "sp")
+            self.fsdp_mesh = init_device_mesh(
+                "cuda", (self.world_size,), mesh_dim_names=("sharded")
             )
-        self.setup_ring_attn(self.device_mesh)
         
         self.step = 0
         self.accumulated_gradient = (
@@ -236,11 +233,6 @@ class FSDP2Strategy(ABC):
             self.mixed_precision_policy = None
         
         self.offload_policy = CPUOffloadPolicy(pin_memory=True) if self.args.fsdp.cpu_offload else None
-        
-        if self.args.fsdp.fsdp_size > -1:
-            self.fsdp_mesh = self.device_mesh["dp_sharded", "sp"]
-        else:
-            self.fsdp_mesh = self.device_mesh["dp", "sp"]
         
         self.fsdp_kwargs = {
             "mesh": self.fsdp_mesh,
