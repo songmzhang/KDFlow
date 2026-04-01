@@ -103,7 +103,7 @@ class FSDP2Strategy(ABC):
                 "cuda", (replicate, self.args.fsdp.fsdp_size), mesh_dim_names=("replicate", "sharded"))
         else:
             self.fsdp_mesh = init_device_mesh(
-                "cuda", (self.world_size,), mesh_dim_names=("sharded")
+                "cuda", (self.world_size,), mesh_dim_names=("sharded",)
             )
         
         self.step = 0
