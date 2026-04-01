@@ -190,15 +190,13 @@ class OnPolicyKDTrainer:
                 self.log_state["student_train_time"].append(time.time() - student_start)
                 
                 if self.args.train.enable_sleep:
-                    self.student.sleep()
-                
-                if self.args.train.enable_sleep:
                     self.rollout_group.wakeup(tags=["weights"])
                 update_start = time.time()
                 self.student.update_rollout_weights()
                 self.log_state["weight_update_time"].append(time.time() - update_start)
                 if self.args.train.enable_sleep:
                     self.rollout_group.sleep(tags=["weights"])
+                    self.student.sleep()
                     
                 self.logging()
         
