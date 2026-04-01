@@ -1,5 +1,6 @@
 import os
 import pickle
+import queue
 import multiprocessing as mp
 from multiprocessing import Queue
 from typing import List, Dict, Any, Optional
@@ -272,7 +273,7 @@ class SGLangEngineService:
 
         self.request_queue.put({"type": "generate", "kwargs": kwargs})
 
-        response = self.response_queue.get()
+        response = self._get_response(req_type="generate", timeout=600)
         if not response.get("success"):
             raise RuntimeError(f"Generate failed: {response.get('error')}")
 
@@ -280,6 +281,8 @@ class SGLangEngineService:
         num_samples = response["num_samples"]
         hidden_states = []
         for _ in range(num_samples):
+            if self._data_socket.poll(timeout=120_000) == 0:
+                raise RuntimeError("ZMQ recv timeout while receiving hidden states")
             meta_bytes = self._data_socket.recv()
             data_bytes = self._data_socket.recv()
             meta = pickle.loads(meta_bytes)
@@ -293,7 +296,7 @@ class SGLangEngineService:
         if not self._started:
             return
         self.request_queue.put({"type": "sleep", "tags": tags})
-        response = self.response_queue.get()
+        response = self._get_response(req_type="sleep", timeout=300)
         if not response.get("success"):
             raise RuntimeError(f"Sleep failed: {response.get('error')}")
         return response.get("tags")
@@ -303,10 +306,24 @@ class SGLangEngineService:
         if not self._started:
             return
         self.request_queue.put({"type": "wakeup", "tags": tags})
-        response = self.response_queue.get()
+        response = self._get_response(req_type="wakeup", timeout=300)
         if not response.get("success"):
             raise RuntimeError(f"Wakeup failed: {response.get('error')}")
         return response.get("tags")
+
+    def _get_response(self, req_type="unknown", timeout=600, check_interval=10):
+        elapsed = 0
+        while elapsed < timeout:
+            try:
+                return self.response_queue.get(timeout=check_interval)
+            except queue.Empty:
+                elapsed += check_interval
+                if self.process and not self.process.is_alive():
+                    raise RuntimeError(
+                        f"Engine subprocess (PID={self.process.pid}) died during '{req_type}'! "
+                        f"exitcode={self.process.exitcode}"
+                    )
+        raise RuntimeError(f"Response timeout after {timeout}s during '{req_type}'")
 
     def shutdown(self):
         """Shutdown the subprocess gracefully."""
@@ -314,7 +331,6 @@ class SGLangEngineService:
             return
         self._started = False
         self._cleanup()
-
 
     def _cleanup(self):
         """Clean up subprocess, queues and shared memory."""
