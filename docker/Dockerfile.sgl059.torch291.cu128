@@ -1,0 +1,42 @@
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0"
+ENV MAX_JOBS=8
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl wget build-essential ninja-build software-properties-common \
+    libnuma-dev libnuma1 numactl \
+    libopenmpi-dev \
+    libibverbs-dev libibverbs1 libibumad3 librdmacm1 \
+    libnl-3-200 libnl-route-3-200 libnl-3-dev libnl-route-3-dev \
+    ibverbs-providers \
+    ffmpeg \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+    python3.12 python3.12-dev python3.12-venv \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
+    && update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir uv
+
+WORKDIR /workspace
+
+RUN git clone https://github.com/songmzhang/KDFlow.git /workspace/KDFlow
+
+RUN uv pip install --system --no-cache "sglang[all]==0.5.9"
+
+RUN pip install --no-cache-dir flash_attn==2.8.3 --no-build-isolation
+
+RUN uv pip install --system --no-cache \
+    "ray>=2.0" datasets tqdm safetensors \
+    huggingface_hub torchdata peft wandb ring_flash_attn \
+    transformers numpy requests triton sglang_router
+
+RUN cd /workspace/KDFlow && pip install --no-cache-dir --no-deps -e .
+
+WORKDIR /workspace/KDFlow
