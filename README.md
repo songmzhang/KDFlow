@@ -4,6 +4,7 @@
   ### **A User-friendly and Efficient Framework for LLM Knowledge Distillation**
 
   [![Release](https://img.shields.io/github/v/release/songmzhang/KDFlow)](https://github.com/songmzhang/KDFlow/releases)
+  [![Docker](https://img.shields.io/badge/Docker-Hub-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/repository/docker/songmzhang/kdflow/tags)
   [![License](https://img.shields.io/github/license/songmzhang/KDFlow)](LICENSE)
   [![arXiv](https://img.shields.io/badge/arXiv-2603.01875-b31b1b?logo=arxiv)](https://arxiv.org/abs/2603.01875)
   [![WeChat](https://img.shields.io/badge/WeChat-Group-07C160?logo=wechat&logoColor=white)](#-wechat-group)
@@ -15,6 +16,7 @@
 
 ## 🔥 News
 
+- **[2026/04]** 🐳 The docker image for KDFlow is now available on [Docker Hub](https://hub.docker.com/repository/docker/songmzhang/kdflow/tags), and the corresponding Dockerfile is also provided in `docker/`.
 - **[2026/03]** 🎉 KDFlow v0.1.2 has been released, supporting multi-node TP/PP for extremely large teacher models.
 - **[2026/03]** 💬 We have created a KDFlow WeChat group! Welcome to [join us](#-wechat-group) for discussion and communication!
 - **[2026/03]** 🎉 KDFlow v0.1.1 released! Now supports **vision-language (multimodal) models** and **Qwen3.5 series**.
@@ -70,12 +72,26 @@
 
 ### Installation
 
+Install from source:
+
 ```bash
 git clone https://github.com/songmzhang/KDFlow.git
 cd KDFlow
 pip install -e ./
 # install flash attention after torch installation
 pip install flash_attn==2.8.3 --no-build-isolation
+```
+
+Use the prebuilt Docker image from Docker Hub:
+
+```bash
+docker pull songmzhang/kdflow:sgl059-torch291-cu128
+```
+
+Or build from the provided Dockerfile:
+
+```bash
+docker build -f docker/Dockerfile.sgl059.torch291.cu128 -t kdflow:sgl059-torch291-cu128 .
 ```
 
 > To support Qwen3.5, please use the latest version of SGLang which supports transformers v5.3.0.
