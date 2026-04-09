@@ -254,7 +254,8 @@ class StudentRayActor:
 
         for batch in train_data:
             micro_batch = {
-                k: torch.from_numpy(v).to(device, non_blocking=True) if isinstance(v, np.ndarray)
+                k: torch.from_numpy(ray.get(v) if isinstance(v, ray.ObjectRef) else v).to(device, non_blocking=True)
+                    if isinstance(v, (np.ndarray, ray.ObjectRef))
                 else v.to(device) if isinstance(v, torch.Tensor)
                 else v
                 for k, v in batch.items()

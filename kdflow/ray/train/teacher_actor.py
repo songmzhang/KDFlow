@@ -122,7 +122,7 @@ class TeacherRayActor:
         for mb_idx, original_batch_idx in enumerate(batch_indices):
             mb_hidden_np = hidden_states_list[sample_idx: sample_idx + mbsz]
             mb_hidden_np = np.concatenate(mb_hidden_np, axis=0)
-            batches[mb_idx]["teacher_hiddens"] = mb_hidden_np
+            batches[mb_idx]["teacher_hiddens"] = ray.put(mb_hidden_np)
             results_with_indices.append((original_batch_idx, batches[mb_idx]))
             sample_idx += mbsz
         
