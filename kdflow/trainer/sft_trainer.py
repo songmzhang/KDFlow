@@ -127,12 +127,10 @@ class SFTTrainer:
                     status = self.kd_algorithm.training_step(micro_batch)
                     loss = status["loss"]
                     self.strategy.backward(loss, self.student, self.optimizer)
+                    status["grad_norm"] = torch.nn.utils.clip_grad_norm_(
+                        self.student.parameters(), max_norm=float("inf")).item()
                     self.strategy.optimizer_step(self.optimizer, self.student, self.scheduler)
                     
-                    if hasattr(self.student, "get_global_grad_norm") and self.student.get_global_grad_norm() is not None:
-                        status["grad_norm"] = self.student.get_global_grad_norm()
-                    elif hasattr(self.student, "clip_grad_norm_"):
-                        status["grad_norm"] =  self.student.clip_grad_norm_(max_norm=self.args.train.max_norm).item()
                     status["lr"] = self.scheduler.get_last_lr()[0]
                     self.logging(micro_step, status)
                 
