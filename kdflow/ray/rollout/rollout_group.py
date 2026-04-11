@@ -97,7 +97,7 @@ class RolloutActorGroup:
         self.router_ip = self._get_node_ip()
         self.router_port = self._find_available_port(random.randint(3000, 4000))
         self.router_process = self._start_sglang_router(self.router_ip, self.router_port)
-        self.router_url = f"http://{self.router_ip}:{self.router_port}"
+        self.router_url = f"http://{self._format_host(self.router_ip)}:{self.router_port}"
 
         self.actors: List[ray.actor.ActorHandle] = []
         self._create_actors(num_gpus_per_actor)
@@ -105,7 +105,7 @@ class RolloutActorGroup:
 
         logger.info(
         f"RolloutGroup initialized: {num_actors} actors (tp={tp_size}), "
-            f"router at {self.router_ip}:{self.router_port}"
+            f"router at {self._format_host(self.router_ip)}:{self.router_port}"
         )
 
     def _create_actors(self, num_gpus_per_actor: float):
@@ -197,7 +197,7 @@ class RolloutActorGroup:
                     break
                 dist_init_port = get_port(30)
                 addr_and_ports[current_rank]["dist_init_addr"] = (
-                    f"{addr_and_ports[current_rank]['host']}:{dist_init_port}"
+                    f"{self._format_host(addr_and_ports[current_rank]['host'])}:{dist_init_port}"
                 )
 
         for i in range(self.num_actors):
@@ -299,12 +299,19 @@ class RolloutActorGroup:
         return ray._private.services.get_node_ip_address().strip("[]")
 
     @staticmethod
+    def _format_host(host: str) -> str:
+        if ":" in host and not host.startswith("["):
+            return f"[{host}]"
+        return host
+
+    @staticmethod
     def _find_available_port(start_port: int = 3000) -> int:
         """Find an available port starting from the given port."""
         for port in range(start_port, 65535):
             try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.bind(("", port))
+                with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
+                    s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                    s.bind(("::", port))
                     return s.getsockname()[1]
             except OSError:
                 continue
@@ -320,7 +327,7 @@ class RolloutActorGroup:
         if hasattr(router_args, "log_level"):
             router_args.log_level = "warn"
 
-        logger.info(f"Launching SGLang router at {host}:{port}")
+        logger.info(f"Launching SGLang router at {RolloutActorGroup._format_host(host)}:{port}")
 
         def _run_router(args):
             launch_router(args)
@@ -334,7 +341,7 @@ class RolloutActorGroup:
         if not process.is_alive():
             raise RuntimeError("SGLang router process died during startup")
 
-        logger.info(f"SGLang router launched successfully at {host}:{port}")
+        logger.info(f"SGLang router launched successfully at {RolloutActorGroup._format_host(host)}:{port}")
         return process
 
     @staticmethod

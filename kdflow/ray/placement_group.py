@@ -1,3 +1,4 @@
+import ipaddress
 import socket
 import logging
 
@@ -19,11 +20,11 @@ class InfoActor:
 def _sort_key(x):
     _, node_id, gpu_id = x
     try:
-        ip_parts = list(map(int, node_id.split(".")))
+        ip_parts = list(ipaddress.ip_address(node_id).packed)
     except ValueError:
         try:
-            ip_parts = list(map(int, socket.gethostbyname(node_id).split(".")))
-        except (socket.gaierror, TypeError):
+            ip_parts = list(ipaddress.ip_address(socket.getaddrinfo(node_id, None)[0][4][0]).packed)
+        except (socket.gaierror, TypeError, ValueError):
             ip_parts = [ord(c) for c in node_id]
     return (ip_parts, gpu_id)
 

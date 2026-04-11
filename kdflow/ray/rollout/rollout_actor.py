@@ -61,7 +61,7 @@ class RolloutRayActor:
         assert nccl_port is not None, "nccl_port must be provided by RolloutGroup"
         assert dist_init_addr is not None, "dist_init_addr must be provided by RolloutGroup"
 
-        self.router_ip = router_ip
+        self.router_ip = self._format_ipv6(router_ip)
         self.router_port = router_port
         self.server_host = self._format_ipv6(host)
         self.server_port = port
@@ -264,8 +264,9 @@ class RolloutRayActor:
     def _is_port_available(port: int) -> bool:
         """Check if a port is available."""
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(("", port))
+            with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                s.bind(("::", port))
                 return True
         except OSError:
             return False

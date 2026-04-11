@@ -167,6 +167,12 @@ class TeacherActorGroup:
                 self.teacher_engines.append(actor)
             logger.info(f"[TeacherActorGroup] Actor {i} created, waiting for ready...")
     
+    @staticmethod
+    def _format_host(host: str) -> str:
+        if ":" in host and not host.startswith("["):
+            return f"[{host}]"
+        return host
+
     def _get_dist_init_addr(self, engine_idx: int, num_gpu_per_engine: int) -> str:
         offset = engine_idx * num_gpu_per_engine
         bundle_idx = self._reordered_bundle_indices[offset] if self._reordered_bundle_indices else offset
@@ -175,8 +181,9 @@ class TeacherActorGroup:
         def _get_node_ip_and_free_port():
             import socket
             ip = ray.util.get_node_ip_address()
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(("", 0))
+            with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                s.bind(("::", 0))
                 port = s.getsockname()[1]
             return ip, port
 
@@ -188,7 +195,7 @@ class TeacherActorGroup:
                 )
             ).remote()
         )
-        return f"{ip}:{port}"
+        return f"{self._format_host(ip)}:{port}"
 
     def forward(self, global_batch):
         """
