@@ -84,12 +84,6 @@ class SFTTrainer:
         self.strategy.log(f"  Learning Rate:         {self.args.train.learning_rate}")
     
     def fit(self, global_step=0, start_epoch=0):
-        # get eval and save steps
-        if self.args.train.eval_steps == -1:
-            self.args.train.eval_steps = float("inf")  # Evaluate once per epoch
-        if self.args.train.save_steps == -1:
-            self.args.train.save_steps = self.num_update_steps_per_epoch  # do not save ckpt
-        
         self.global_step = global_step
         
         # Print training configuration
@@ -134,6 +128,11 @@ class SFTTrainer:
                     status["lr"] = self.scheduler.get_last_lr()[0]
                     self.logging(micro_step, status)
                 
+                if self.global_step % self.args.train.save_steps == 0:
+                    self.strategy.log(f"Saving model at global step {self.global_step}")
+                    save_path = os.path.join(self.args.train.save_path, f"epoch_{epoch + 1}_global_step_{self.global_step}")
+                    self.strategy.save_model(self.student, self.student.tokenizer, save_path)
+
             self.strategy.log(f"Saving model after epoch {epoch + 1}")
             save_path = os.path.join(self.args.train.save_path, f"epoch_{epoch + 1}")
             self.strategy.save_model(self.student, self.student.tokenizer, save_path)

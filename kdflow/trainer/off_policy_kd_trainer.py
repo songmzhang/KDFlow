@@ -100,12 +100,6 @@ class OffPolicyKDTrainer:
         logger.info(f"  KD Loss Function:      {self.args.kd.kd_loss_fn}")
     
     def fit(self, global_step=0, start_epoch=0):
-        # get eval and save steps
-        if self.args.train.eval_steps == -1:
-            self.args.train.eval_steps = float("inf")  # Evaluate once per epoch
-        if self.args.train.save_steps == -1:
-            self.args.train.save_steps = self.num_update_steps_per_epoch  # do not save ckpt
-        
         self.global_step = global_step
         
         # Print training configuration and initialize loggers
@@ -174,6 +168,11 @@ class OffPolicyKDTrainer:
                     self.log_state["teacher_step_fwd_time"].append(teacher_step_fwd_time)
                     self.log_state["student_step_train_time"].append((time.time() - student_start))
                     self.logging()
+                    
+                    if self.global_step % self.args.train.save_steps == 0:
+                        self.strategy.log(f"Saving model at global step {self.global_step}")
+                        save_path = os.path.join(self.args.train.save_path, f"epoch_{epoch + 1}_global_step_{self.global_step}")
+                        ray.get(self.student.async_save_model(save_path))
                 
                 if self.args.train.enable_sleep:
                     self.student.sleep()
