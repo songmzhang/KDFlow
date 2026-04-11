@@ -99,7 +99,7 @@ class PromptDataset(Dataset):
         """Print sample data for debugging."""
         self.strategy.print(f"Total samples: {len(self.processed_dataset)}")
         self.strategy.print(f"Sample student prompt:\n{self.processed_dataset[0]['stu_prompt']}")
-        if not self.template_identical:
+        if not self.template_identical or self.teacher_input_key != self.input_key:
             self.strategy.print(f"Sample teacher prompt:\n{self.processed_dataset[0]['tea_prompt']}")
 
     def process_data(self, data: Dict) -> Dict[str, Any]:

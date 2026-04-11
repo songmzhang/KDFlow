@@ -184,7 +184,7 @@ class StudentActorGroup:
         ]
         ray.get(refs)
 
-    def update_rollout_weights(self, rollout_actors=None):
+    def update_rollout_weights(self):
         """Stream FSDP weights to rollout engines via Gloo gather + CUDA IPC.
 
         All ranks participate: each rank serializes its local CUDA IPC data,
@@ -192,6 +192,33 @@ class StudentActorGroup:
         """
         refs = [
             actor.update_rollout_weights.remote()
+            for actor in self._actor_handlers
+        ]
+        ray.get(refs)
+        
+    def connect_teacher_actors(self, teacher_actors, num_gpus_per_actor):
+        """Create Gloo IPC groups between training ranks and teacher actors.
+
+        This process is exactly the same as connect_rollout_engines since teacher actors are also served with SGLang.
+
+        Args:
+            teacher_actors: List of TeacherRayActor handles.
+            num_gpus_per_actor: Number of GPUs per teacher actor (tp_size * pp_size).
+        """
+        refs = [
+            actor.connect_teacher_actors.remote(teacher_actors, num_gpus_per_actor)
+            for actor in self._actor_handlers
+        ]
+        ray.get(refs)
+        
+    def update_teacher_weights(self):
+        """Stream FSDP weights to teacher_actors via Gloo gather + CUDA IPC.
+
+        All ranks participate: each rank serializes its local CUDA IPC data,
+        gathers to the source rank via Gloo, and the source rank sends to sglang.
+        """
+        refs = [
+            actor.update_teacher_weights.remote()
             for actor in self._actor_handlers
         ]
         ray.get(refs)

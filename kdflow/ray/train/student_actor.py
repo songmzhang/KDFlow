@@ -298,7 +298,7 @@ class StudentRayActor:
         for key in status:
             status[key] = self.strategy.all_reduce(status[key], op="mean")
         
-        self.empty_cache()
+        # self.empty_cache()
         
         return status
 
@@ -356,10 +356,34 @@ class StudentRayActor:
 
     def update_rollout_weights(self):
         """Stream FSDP weights to rollout engines via Gloo gather + CUDA IPC."""
-        model = self.student.model.module if self.args.train.backend == "deepspeed" else self.student.model
+        model = self.student.model
         self.strategy.update_rollout_weights_from_tensor(
             model,
             engine=self._ipc_engine,
             gather_src=self._ipc_gather_src,
             gather_group=self._ipc_gather_group,
+        )
+        
+    def connect_teacher_actors(self, teacher_actors, num_gpus_per_actor):
+        import torch.distributed as dist
+        self._teacher_actors = teacher_actors
+        for i, actor in enumerate(self._teacher_actors):
+            start_rank = i * num_gpus_per_actor
+            end_rank = (i + 1) * num_gpus_per_actor
+            group_ranks = list(range(start_rank, end_rank))
+            new_group = dist.new_group(ranks=group_ranks, backend="gloo")
+            if dist.get_rank() in group_ranks:
+                self._ipc_gather_src_for_teacher = start_rank
+                self._ipc_gather_group_for_teacher = new_group
+                self._ipc_teacher_actor = actor
+                self._teacher_internal_rank = dist.get_rank() - start_rank
+    
+    def update_teacher_weights(self):
+        """Stream FSDP weights to teacher actors via Gloo gather + CUDA IPC."""
+        model = self.student.model
+        self.strategy.update_rollout_weights_from_tensor(
+            model,
+            engine=self._ipc_teacher_actor,
+            gather_src=self._ipc_gather_src_for_teacher,
+            gather_group=self._ipc_gather_group_for_teacher,
         )

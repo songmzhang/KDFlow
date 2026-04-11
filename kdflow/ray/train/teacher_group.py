@@ -258,13 +258,13 @@ class TeacherActorGroup:
         
         return results
     
-    def sleep(self):
+    def sleep(self, tags=None):
         """Release GPU memory on all teacher engines."""
-        ray.get([actor.sleep.remote() for actor in self.teacher_engines])
+        ray.get([actor.sleep.remote(tags=tags) for actor in self.teacher_engines])
     
-    def wakeup(self):
+    def wakeup(self, tags=None):
         """Resume GPU memory on all teacher engines."""
-        ray.get([actor.wakeup.remote() for actor in self.teacher_engines])
+        ray.get([actor.wakeup.remote(tags=tags) for actor in self.teacher_engines])
         
     def shutdown(self):
         """Shutdown all teacher engines."""

@@ -128,13 +128,25 @@ class TeacherRayActor:
         
         return results_with_indices
     
-    def sleep(self):
+    def sleep(self, tags=None):
         """Release GPU memory occupation, move weights to CPU."""
-        self.engine_service.sleep(tags=self.strategy.args.kd.teacher_offload_tags)
+        if tags is None:
+            tags = self.strategy.args.kd.teacher_offload_tags
+        self.engine_service.sleep(tags=tags)
         
-    def wakeup(self):
+    def wakeup(self, tags=None):
         """Resume GPU memory occupation, move weights back to GPU."""
-        self.engine_service.wakeup(tags=self.strategy.args.kd.teacher_offload_tags)
+        if tags is None:
+            tags = self.strategy.args.kd.teacher_offload_tags
+        self.engine_service.wakeup(tags=tags)
+        
+    def update_weights_from_tensor(self, serialized_named_tensors, load_format, flush_cache):
+        return self.engine_service.update_weights_from_tensor(
+            serialized_named_tensors, load_format, flush_cache)
+    
+    def flush_cache(self):
+        """Flush cache. No-op for teacher engine since disable_radix_cache=True."""
+        pass
     
     def shutdown(self):
         """Shutdown the engine service."""

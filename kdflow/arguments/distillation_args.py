@@ -60,6 +60,10 @@ class DistillationArguments:
         default=0.4,
         metadata={"help": "Memory fraction for teacher model."}
     )
+    teacher_update_freq: int = field(
+        default=1,
+        metadata={"help": "Weight update frequency for teacher model."}
+    )
     # DSKD hyperparameters
     dskd_token_align: str = field(
         default="eta",

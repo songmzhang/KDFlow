@@ -3,7 +3,7 @@ import pickle
 import queue
 import multiprocessing as mp
 from multiprocessing import Queue
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Tuple, Optional
 from dataclasses import dataclass
 
 import zmq
@@ -106,6 +106,8 @@ def _engine_worker(config: EngineConfig, request_queue: Queue, response_queue: Q
                     _handle_sleep(engine, request, config, response_queue)
                 elif req_type == "wakeup":
                     _handle_wakeup(engine, request, config, response_queue)
+                elif req_type == "update_weights_from_tensor":
+                    _handle_update_weights_from_tensor(engine, request, response_queue)
                 else:
                     response_queue.put({"type": req_type, "success": False,
                                         "error": f"Unknown request type: {req_type}"})
@@ -189,6 +191,19 @@ def _handle_wakeup(engine, request, config, response_queue):
     torch.cuda.empty_cache()
     engine.resume_memory_occupation(tags=_normalize_tags(tags))
     response_queue.put({"type": "wakeup", "success": True, "tags": tags})
+    
+    
+def _handle_update_weights_from_tensor(engine, request, response_queue):
+    """Handle a update_weights_from_tensor request: update weights from student (for self-distillation)."""
+    serialized_named_tensors = request["kwargs"]["serialized_named_tensors"]
+    load_format = request["kwargs"]["load_format"]
+    flush_cache = request["kwargs"]["flush_cache"]
+    engine.update_weights_from_tensor(
+        named_tensors=serialized_named_tensors,
+        load_format=load_format,
+        flush_cache=flush_cache,
+    )
+    response_queue.put({"type": "update_weights_from_tensor", "success": True})
 
 
 class SGLangEngineService:
@@ -310,6 +325,19 @@ class SGLangEngineService:
         if not response.get("success"):
             raise RuntimeError(f"Wakeup failed: {response.get('error')}")
         return response.get("tags")
+    
+    def update_weights_from_tensor(
+        self, serialized_named_tensors: List[Tuple[str, torch.Tensor]],
+        load_format: Optional[str] = None, flush_cache: bool = True):
+        kwargs = {
+            "serialized_named_tensors": serialized_named_tensors,
+            "load_format": load_format,
+            "flush_cache": flush_cache,
+        }
+        self.request_queue.put({"type": "update_weights_from_tensor", "kwargs": kwargs})
+        response = self._get_response(req_type="update_weights_from_tensor", timeout=300)
+        if not response.get("success"):
+            raise RuntimeError(f"update_weights_from_tensor failed: {response.get('error')}")
 
     def _get_response(self, req_type="unknown", timeout=600, check_interval=10):
         elapsed = 0
