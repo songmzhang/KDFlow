@@ -186,6 +186,9 @@ class OnPolicyKDTrainer:
                         
                 self.log_state["student_train_time"].append(time.time() - student_start)
                 
+                ray.get([actor.empty_cache.remote() for actor in self.student._actor_handlers])
+
+                # update weights in rollout actors
                 if self.args.train.enable_sleep:
                     self.rollout_group.wakeup(tags=["weights"])
                 update_start = time.time()
@@ -194,7 +197,9 @@ class OnPolicyKDTrainer:
                 if self.args.train.enable_sleep:
                     self.rollout_group.sleep(tags=["weights"])
                 
-                if self.global_step % self.args.kd.teacher_update_freq == 0:
+                # update weights in teacher actors (only for self-distillation)
+                if self.args.model.teacher_name_or_path == self.args.model.student_name_or_path \
+                    and self.global_step % self.args.kd.teacher_update_freq == 0:
                     if self.args.train.enable_sleep:
                         self.teacher.wakeup(tags=["weights"])
                     teacher_update_start = time.time()
