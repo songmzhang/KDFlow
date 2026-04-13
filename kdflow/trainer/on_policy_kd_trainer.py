@@ -1,5 +1,6 @@
 import os
 import time
+import json
 from tqdm import tqdm
 from datetime import timedelta
 from typing import Dict, List, Optional, Callable, Any
@@ -257,6 +258,15 @@ class OnPolicyKDTrainer:
             all_images = sum([[imgs] * n_samples_per_prompt for imgs in all_images], [])
         
         all_outputs = self.rollout_group.generate(all_stu_prompts, self.generate_kwargs, image_data=all_images)
+
+        rollout_dir = os.path.join(self.args.train.save_path, "rollout_data")
+        os.makedirs(rollout_dir, exist_ok=True)
+        with open(os.path.join(rollout_dir, f"{self.global_step}.jsonl"), "w") as f:
+            for prompt, output in zip(all_stu_prompts, all_outputs):
+                record = {"prompt": prompt, "output": output["text"]}
+                if "reward_result" in output:
+                    record["reward_result"] = output["reward_result"]
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
         # Process outputs into rollout samples
         sample_list = [
