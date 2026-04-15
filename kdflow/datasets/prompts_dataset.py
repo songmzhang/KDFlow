@@ -143,6 +143,8 @@ class PromptDataset(Dataset):
         """
         if self.apply_chat_template:
             chat = convert_to_openai_messages(data[input_key], expand_image=self.image_key is not None)
+            while chat and chat[-1].get("role", "user") == "assistant":
+                chat.pop()
             return processor_or_tokenizer.apply_chat_template(
                 chat,
                 tokenize=False,
