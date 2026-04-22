@@ -47,7 +47,7 @@ class VanillaKD:
         student_logits = student_logits[:, :minV]
         if teacher_logits.shape != student_logits.shape:
             from transformers import AutoTokenizer
-            _tokenizer = AutoTokenizer.from_pretrained(self.args.student_model_path)
+            _tokenizer = AutoTokenizer.from_pretrained(self.args.model.student_model_path)
             _stu_tokens = _tokenizer.convert_ids_to_tokens(student_input_ids[student_loss_mask].cpu().tolist())
             _tea_tokens = _tokenizer.convert_ids_to_tokens(teacher_input_ids[teacher_loss_mask].cpu().tolist())
             assert False, \

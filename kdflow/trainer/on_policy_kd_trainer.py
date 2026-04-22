@@ -13,6 +13,7 @@ import torch.distributed as dist
 from kdflow.datasets.utils import get_tokenizer_or_processor
 from kdflow.utils.logging_utils import init_logger
 from kdflow.utils.utils import zero_pad_sequences
+from kdflow.utils.dynamic_bsz import rearrange_global_batch
 
 
 logger = init_logger(__name__)
@@ -78,6 +79,7 @@ class OnPolicyKDTrainer:
                 self.teacher_processor = self.student_processor
         
         self.world_size = self.args.train.num_nodes * self.args.train.num_gpus_per_node
+        self.dp_size = self.world_size // self.args.model.ring_attn_size
         
         assert self.args.kd.kd_ratio == 1.0, "On-policy KD only supports kd_ratio=1.0."
         
@@ -168,7 +170,14 @@ class OnPolicyKDTrainer:
                 all_global_batches = []
                 for i in range(0, len(rollout_samples), num_micro_batches):
                     global_batch = rollout_samples_for_kd[i : i + num_micro_batches]
-                    
+
+                    if self.args.train.use_dynamic_bsz:
+                        global_batch = rearrange_global_batch(
+                            global_batch,
+                            max_token_len=self.args.train.max_token_len_per_gpu,
+                            dp_size=self.dp_size,
+                        )
+
                     global_batch_token_num = sum(mb["stu_loss_mask"].sum() for mb in global_batch)
                     avg_micro_batch_token_num = global_batch_token_num / len(global_batch)
                     for mb in global_batch:

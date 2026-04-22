@@ -99,6 +99,14 @@ class TrainingArguments:
     seed: int = field(
         default=42,
     )
+    use_dynamic_bsz: bool = field(
+        default=False,
+        metadata={"help": "Enable dynamic batch size based on token count per GPU."}
+    )
+    max_token_len_per_gpu: int = field(
+        default=0,
+        metadata={"help": "Maximum total token count per micro-batch when use_dynamic_bsz is True."}
+    )
     bf16: bool = field(
         default=False
     )

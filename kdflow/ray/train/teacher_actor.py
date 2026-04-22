@@ -93,7 +93,6 @@ class TeacherRayActor:
             List of (batch_idx, micro-batch with teacher_hiddens) tuples and return timestamp
         """
         batches = [global_batch[i] for i in batch_indices]
-        mbsz = batches[0]["tea_input_ids"].shape[0]
         
         # Collect prompts and loss masks across all micro-batches
         prompts = sum((micro_batch["tea_full_texts"] for micro_batch in batches), [])
@@ -120,6 +119,7 @@ class TeacherRayActor:
         sample_idx = 0
         results_with_indices = []  # List of (original_batch_idx, batch_with_hiddens)
         for mb_idx, original_batch_idx in enumerate(batch_indices):
+            mbsz = batches[mb_idx]["tea_input_ids"].shape[0]
             mb_hidden_np = hidden_states_list[sample_idx: sample_idx + mbsz]
             mb_hidden_np = np.concatenate(mb_hidden_np, axis=0)
             batches[mb_idx]["teacher_hiddens"] = ray.put(mb_hidden_np)

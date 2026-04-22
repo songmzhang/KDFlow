@@ -11,6 +11,7 @@ import torch.distributed as dist
 from tqdm import tqdm
 
 from kdflow.utils.logging_utils import init_logger
+from kdflow.utils.dynamic_bsz import rearrange_global_batch
 
 
 logger = init_logger(__name__)
@@ -53,6 +54,7 @@ class OffPolicyKDTrainer:
         self.num_update_steps_per_epoch = num_update_steps_per_epoch
         self.epochs = self.args.train.num_epochs
         self.world_size = self.args.train.num_nodes * self.args.train.num_gpus_per_node
+        self.dp_size = self.world_size // self.args.model.ring_attn_size
         
         self.log_state = defaultdict(list)
         self._init_loggers()
@@ -129,6 +131,12 @@ class OffPolicyKDTrainer:
                         is_epoch_finished = True
                         break
                     if not is_epoch_finished:
+                        if self.args.train.use_dynamic_bsz:
+                            global_batch = rearrange_global_batch(
+                                global_batch,
+                                max_token_len=self.args.train.max_token_len_per_gpu,
+                                dp_size=self.dp_size,
+                            )
                         global_batch_token_num = sum(mb["stu_loss_mask"].sum() for mb in global_batch)
                         avg_micro_batch_token_num = global_batch_token_num / len(global_batch)
                         for mb in global_batch:

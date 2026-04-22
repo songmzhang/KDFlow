@@ -253,6 +253,10 @@ class StudentRayActor:
         device = torch.cuda.current_device()
         status = defaultdict(list)
 
+        if self.args.train.use_dynamic_bsz:
+            self.strategy.accumulated_gradient = len(train_data)
+            self.strategy.step = 0
+
         for batch in train_data:
             micro_batch = {
                 k: torch.from_numpy(ray.get(v) if isinstance(v, ray.ObjectRef) else v).to(device, non_blocking=True)

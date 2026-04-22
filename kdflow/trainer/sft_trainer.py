@@ -11,6 +11,7 @@ from collections import defaultdict
 
 from kdflow.algorithms.sft import SFT
 from kdflow.utils.logging_utils import init_logger
+from kdflow.utils.dynamic_bsz import rearrange_global_batch
 
 
 logger = init_logger(__name__)
@@ -37,6 +38,8 @@ class SFTTrainer:
         self.scheduler = scheduler
         self.num_update_steps_per_epoch = num_update_steps_per_epoch
         self.epochs = args.train.num_epochs
+        
+        self.dp_group = strategy.sp_mesh['dp'].get_group()
         
         self.kd_algorithm = SFT(strategy=strategy, student_model=self.student)
         
@@ -108,9 +111,18 @@ class SFTTrainer:
                 except StopIteration:
                     break
                 
+                if self.args.train.use_dynamic_bsz:
+                    global_batch = rearrange_global_batch(
+                        global_batch,
+                        max_token_len=self.args.train.max_token_len_per_gpu,
+                        dp_group=self.dp_group,
+                    )
+                    self.strategy.accumulated_gradient = len(global_batch)
+                    self.strategy.step = 0
+                
                 global_batch_token_num = global_batch_token_num.to(torch.cuda.current_device())
                 dist.all_reduce(global_batch_token_num, op=dist.ReduceOp.SUM)
-                avg_micro_batch_token_num = global_batch_token_num / (self.strategy.accumulated_gradient * dist.get_world_size())
+                avg_micro_batch_token_num = global_batch_token_num / (len(global_batch) * dist.get_world_size())
                 
                 self.global_step += 1
                 for micro_step, micro_batch in enumerate(global_batch):
