@@ -16,7 +16,8 @@
 
 ## 🔥 News
 
-- **[2026/04]** Support weight synchronization from student to teacher in on-policy self-distillation.
+- **[2026/04]** ⚡ Support dynamic batch size (enabled via `--use_dynamic_bsz True` and `--max_token_len_per_gpu <N>`), which accelerates training by almost **60% to 100%**.
+- **[2026/04]** 🎉 KDFlow v0.1.3 has been released, now supporting weight synchronization from student to teacher in on-policy self-distillation (controlled by `--teacher_update_freq`, defaults to `1` meaning the teacher is synced every global step when student and teacher share the same model path).
 - **[2026/04]** 🐳 The docker image for KDFlow is now available on [Docker Hub](https://hub.docker.com/repository/docker/songmzhang/kdflow/tags), and the corresponding Dockerfile is also provided in `docker/`.
 - **[2026/03]** 🎉 KDFlow v0.1.2 has been released, supporting multi-node TP/PP for extremely large teacher models.
 - **[2026/03]** 💬 We have created a KDFlow WeChat group! Welcome to [join us](#-wechat-group) for discussion and communication!
@@ -196,6 +197,8 @@ bash ./examples/sft/run_qwen3_4b.sh
 | `--ckpt_path` | `./ckpt/checkpoints_distill` | Checkpoint save path |
 | `--seed` | `42` | Random seed |
 | `--bf16` | `False` | Enable bfloat16 training |
+| `--use_dynamic_bsz` | `False` | Enable dynamic batch size based on token count per GPU |
+| `--max_token_len_per_gpu` | `0` | Maximum total token count per micro-batch when `use_dynamic_bsz` is True |
 
 ### FSDP Arguments
 
@@ -227,6 +230,7 @@ bash ./examples/sft/run_qwen3_4b.sh
 | `--skew_lambda` | `0.1` | Lambda for Skewed KL/RKL |
 | `--adaptive_alpha` | `0.5` | Alpha for Adaptive KL Divergence |
 | `--hrl_topk` | `5` | Top-k for Hierarchical Ranking Loss |
+| `--teacher_update_freq` | `1` | Teacher weight update frequency (in global steps) for on-policy self-distillation |
 
 ### Rollout Arguments (On-Policy)
 
