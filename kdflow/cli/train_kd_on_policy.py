@@ -45,7 +45,8 @@ def train(args):
         num_gpus_per_actor=0.3,
         pg=(pg, reordered_bundle_indices, reordered_gpu_ids),
     )
-    rollout_group.sleep()
+    if args.train.enable_sleep:
+        rollout_group.sleep()
     
     teacher_model = TeacherActorGroup(
         strategy,
