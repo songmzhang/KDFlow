@@ -111,5 +111,5 @@ def train(args):
 
 
 if __name__ == "__main__":
-    args = init_args()
+    args = init_args("sft")
     train(args)

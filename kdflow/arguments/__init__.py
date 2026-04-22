@@ -25,7 +25,7 @@ class AllArguments:
     log: LoggingArguments = field(default_factory=LoggingArguments)
     
 
-def init_args():
+def init_args(scenario: str = "sft"):
     parser = HfArgumentParser((
         DataArguments,
         ModelArguments,
@@ -81,7 +81,7 @@ def init_args():
             
     total_gpus = args.train.num_nodes * args.train.num_gpus_per_node
     
-    if args.rollout.rollout_num_engines > 0:
+    if scenario == "on_policy_kd":
         if total_gpus % args.rollout.rollout_tp_size != 0:
             raise ValueError(
                 f"Total GPUs ({total_gpus}) must be divisible by rollout_tp_size ({args.rollout.rollout_tp_size})."
@@ -103,7 +103,7 @@ def init_args():
                 f"Automatically increase --max_len to {args.data.max_len}."
             )
     
-    if args.model.teacher_name_or_path is not None:
+    if scenario in ("off_policy_kd", "on_policy_kd") and args.model.teacher_name_or_path is not None:
         teacher_parallel = args.kd.teacher_tp_size * args.kd.teacher_pp_size
         if total_gpus % teacher_parallel != 0:
             raise ValueError(

@@ -169,5 +169,5 @@ def train(args):
 
 
 if __name__ == "__main__":
-    args = init_args()
+    args = init_args("on_policy_kd")
     train(args)
