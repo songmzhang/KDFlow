@@ -36,12 +36,13 @@ class VanillaKD:
             ring_attn_group=self.strategy.ring_attn_group,
             **mm_kwargs,
         )
-        student_logits = output["logits"]
+        student_hiddens = output["hidden_states"][-1][student_loss_mask]
+        del output
 
         teacher_hiddens = teacher_hiddens.to(self.teacher_lm_head.weight)
         teacher_logits = self.teacher_lm_head(teacher_hiddens)
         
-        student_logits = student_logits[student_loss_mask]
+        student_logits = self.student.model.lm_head(student_hiddens)
         minV = min(teacher_logits.shape[-1], student_logits.shape[-1])
         teacher_logits = teacher_logits[:, :minV]
         student_logits = student_logits[:, :minV]

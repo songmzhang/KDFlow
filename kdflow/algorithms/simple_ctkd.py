@@ -108,12 +108,13 @@ class SimpleCrossTokenizerKD:
             ring_attn_group=self.strategy.ring_attn_group,
             **mm_kwargs,
         )
-        student_logits = output["logits"]
+        student_hiddens = output["hidden_states"][-1][student_loss_mask]
+        del output
 
         teacher_hiddens = teacher_hiddens.to(self.teacher_lm_head.weight)
         teacher_logits = self.teacher_lm_head(teacher_hiddens)
         
-        student_logits = student_logits[student_loss_mask]
+        student_logits = self.student.model.lm_head(student_hiddens)
         
         student_label_ids = student_input_ids.roll(shifts=-1, dims=1)[student_loss_mask]
         teacher_label_ids = teacher_input_ids.roll(shifts=-1, dims=1)[teacher_loss_mask]

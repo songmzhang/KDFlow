@@ -188,14 +188,14 @@ class DSKD:
             ring_attn_group=self.strategy.ring_attn_group,
             **mm_kwargs,
         )
-        student_hiddens = output["hidden_states"][-1]
-        student_logits = output["logits"]
+        student_hiddens = output["hidden_states"][-1][student_loss_mask]
+        del output
 
         teacher_hiddens = teacher_hiddens.to(self.teacher_lm_head.weight)
         teacher_logits = self.teacher_lm_head(teacher_hiddens)
 
-        student_hiddens = student_hiddens[student_loss_mask]
-        student_logits = student_logits[student_loss_mask]
+        student_logits = self.student.model.lm_head(student_hiddens)
+        
         
         if self.vocab_identical:
             loss_info = self._compute_dskd_loss(

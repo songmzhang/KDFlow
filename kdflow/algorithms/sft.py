@@ -27,8 +27,9 @@ class SFT:
             ring_attn_group=self.strategy.ring_attn_group,
             **mm_kwargs,
         )
-        student_logits = output["logits"]
-        student_logits = student_logits[student_loss_mask]
+        student_hiddens = output["hidden_states"][-1][student_loss_mask]
+        del output
+        student_logits = self.student.model.lm_head(student_hiddens)
         
         loss_info = {}
         V = student_logits.shape[-1]

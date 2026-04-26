@@ -107,16 +107,12 @@ class DistillModel(nn.Module):
             position_ids.masked_fill_(attention_mask == 0, 1)
 
         output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids, output_hidden_states=True, **kwargs)
+        output = {"hidden_states": [output["hidden_states"][-1]]}
         
         if allgather_logits and self.packing_samples:
-            output["logits"] = gather_and_pad_tensor(
-                output["logits"], ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
+            output["hidden_states"][-1] = gather_and_pad_tensor(
+                output["hidden_states"][-1], ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
             ).squeeze(-2)
-            output["hidden_states"] = list(output["hidden_states"])
-            for i in range(len(output["hidden_states"])):
-                 output["hidden_states"][i] = gather_and_pad_tensor(
-                    output["hidden_states"][i], ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
-                ).squeeze(-2)
         return output
 
     def _print_model(self):
