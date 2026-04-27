@@ -385,6 +385,12 @@ class FSDP2Strategy(ABC):
         
         state_dict = get_model_state_dict(model_to_save, options=options)
         
+        if self.args.train.bf16:
+            state_dict = {
+                k: v.to(torch.bfloat16) if torch.is_floating_point(v) else v
+                for k, v in state_dict.items()
+            }
+        
         if self.is_rank_0():
             if isinstance(model_to_save, PeftModel):
                 model_to_save.save_pretrained(output_dir, **kwargs)
