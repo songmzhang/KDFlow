@@ -133,7 +133,7 @@ or DSKD:
 bash ./examples/cross_tokenizer_kd/run_qwen3_30b_a3b_to_llama3_2_3b_offpolicy.sh
 ```
 
-#### Off-Policy
+#### On-Policy
 
 Use SimpleCrossTokenizerKD (suggested):
 ```bash
