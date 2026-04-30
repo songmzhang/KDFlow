@@ -392,10 +392,11 @@ class FSDP2Strategy(ABC):
         
         if self.is_rank_0():
             if isinstance(model_to_save, PeftModel):
-                model_to_save.save_pretrained(output_dir, **kwargs)
-                torch.save(
-                    get_peft_model_state_dict(model_to_save, state_dict),
-                    os.path.join(output_dir, "adapter_model.bin"),
+                model_to_save.save_pretrained(
+                    output_dir, 
+                    state_dict=state_dict,
+                    safe_serialization=False,
+                    **kwargs
                 )
             else:
                 model_to_save.save_pretrained(output_dir, state_dict=state_dict, **kwargs)
