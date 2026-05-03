@@ -9,8 +9,15 @@ from dataclasses import dataclass
 import zmq
 import numpy as np
 import torch
-from sglang.srt.entrypoints.engine import Engine as _SglEngine
-from sglang.srt.managers.scheduler import run_scheduler_process as _original_run_scheduler_process
+
+try:
+    from sglang.srt.entrypoints.engine import Engine as _SglEngine
+    from sglang.srt.managers.scheduler import run_scheduler_process as _original_run_scheduler_process
+    _SGLANG_AVAILABLE = True
+except ModuleNotFoundError:
+    _SglEngine = object
+    _original_run_scheduler_process = None
+    _SGLANG_AVAILABLE = False
 
 
 os.environ["SGLANG_JIT_DEEPGEMM_FAST_WARMUP"] = "true"

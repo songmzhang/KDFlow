@@ -1,7 +1,18 @@
 import torch
 import torch.distributed as dist
-from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
-from flash_attn.utils.distributed import all_gather
+
+
+def _require_flash_attn():
+    """Deferred import — only needed for packing_samples=True."""
+    try:
+        from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
+        from flash_attn.utils.distributed import all_gather as _fa_all_gather
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(
+            "flash_attn is required for packing_samples=True. "
+            "Install with: pip install flash_attn --no-build-isolation"
+        ) from e
+    return index_first_axis, pad_input, rearrange, unpad_input, _fa_all_gather
 
 RING_ATTN_GROUP = None
 
@@ -110,7 +121,12 @@ def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
 
     Returns:
         tuple: Processed sequences and related tensors for ring attention
+
+    Note:
+        Requires ``flash_attn`` — only called when ``packing_samples=True``.
     """
+    index_first_axis, pad_input, rearrange, unpad_input, _ = _require_flash_attn()
+
     rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
     sequences, indices, cu_seqlens, _, _ = unpad_input(sequences.unsqueeze(-1), attention_mask)
     sequences = sequences.transpose(0, 1)  # (1, total_seqs)
@@ -158,9 +174,14 @@ def gather_and_pad_tensor(tensor, ring_attn_group, ring_attn_pad_len, indices, b
 
     Returns:
         Padded tensor
+
+    Note:
+        Requires ``flash_attn`` — only called when ``packing_samples=True``.
     """
+    _, pad_input, _, _, fa_all_gather = _require_flash_attn()
+
     if ring_attn_group is not None:
-        tensor = all_gather(tensor.transpose(0, 1), ring_attn_group).transpose(0, 1)  # (1, total_seqs)
+        tensor = fa_all_gather(tensor.transpose(0, 1), ring_attn_group).transpose(0, 1)  # (1, total_seqs)
         if ring_attn_pad_len > 0:
             tensor = tensor[:, :-ring_attn_pad_len]
     tensor = pad_input(tensor.transpose(0, 1), indices, batch, seqlen).squeeze(-1)  # (batch, seqlen)
