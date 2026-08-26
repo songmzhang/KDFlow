@@ -152,7 +152,7 @@ class RolloutDataProcessor:
         prefix: str,
         images=None,
         response_ids: Optional[List[int]] = None,
-        append_eos: bool = True,
+        append_eos: bool = False,
     ) -> Dict[str, Any]:
         """Tokenize prompt and response for a single sample."""
         tokenizer = getattr(processor, "tokenizer", processor)
@@ -276,7 +276,22 @@ class RolloutDataProcessor:
             output_log_probs, dtype=torch.float32
         )
 
-        if not self.is_same_tokenizer or tea_prompt != stu_prompt:
+        if self.is_same_tokenizer and tea_prompt == stu_prompt:
+            tea_tokens = {
+                "tea_input_ids": stu_tokens["stu_input_ids"].clone(),
+                "tea_attn_mask": stu_tokens["stu_attn_mask"].clone(),
+                "tea_loss_mask": stu_tokens["stu_loss_mask"].clone(),
+            }
+        elif self.is_same_tokenizer:
+            tea_tokens = self._tokenize_sample(
+                tea_prompt,
+                response_text,
+                self.student_processor,
+                "tea",
+                images=images,
+                response_ids=response_ids,
+            )
+        else:
             teacher_processor = self._get_teacher_processor(teacher_routing_key)
             tea_tokens = self._tokenize_sample(
                 tea_prompt,
@@ -286,12 +301,6 @@ class RolloutDataProcessor:
                 images=images,
                 append_eos=response_has_eos,
             )
-        else:
-            tea_tokens = {
-                "tea_input_ids": stu_tokens["stu_input_ids"].clone(),
-                "tea_attn_mask": stu_tokens["stu_attn_mask"].clone(),
-                "tea_loss_mask": stu_tokens["stu_loss_mask"].clone(),
-            }
 
         prompt_length = stu_tokens["_stu_prompt_length"]
         response_length = len(response_ids)
@@ -300,12 +309,18 @@ class RolloutDataProcessor:
         teacher_processor = self._get_teacher_processor(teacher_routing_key)
         tokenizer = getattr(teacher_processor, "tokenizer", teacher_processor)
         if images:
-            feed_ids = tokenizer(
-                tea_prompt + response_text, add_special_tokens=False
-            )["input_ids"]
-            tea_feed_input_ids = feed_ids
-            if response_has_eos:
-                tea_feed_input_ids.append(tokenizer.eos_token_id)
+            # tea_feed_input_ids will be sent to SGLang engine and only contains one <image_pad_id>
+            if self.is_same_tokenizer:
+                prompt_ids = tokenizer(
+                    tea_prompt, add_special_tokens=False
+                )["input_ids"]
+                tea_feed_input_ids = prompt_ids + response_ids
+            else:
+                tea_feed_input_ids = tokenizer(
+                    tea_prompt + response_text, add_special_tokens=False
+                )["input_ids"]
+                if response_has_eos:
+                    tea_feed_input_ids.append(tokenizer.eos_token_id)
         else:
             tea_feed_input_ids = tea_tokens["tea_input_ids"].tolist()
 
