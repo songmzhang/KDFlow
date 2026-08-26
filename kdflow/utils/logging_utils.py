@@ -12,7 +12,7 @@ _RESET = "\033[0m"
 def define_wandb_metrics(wandb) -> None:
     """Configure the shared step metric for all trainer metric namespaces."""
     wandb.define_metric("train/global_step")
-    for namespace in ("train", "distill", "rollout", "timing"):
+    for namespace in ("train", "distill", "rollout", "rollout_corr", "timing"):
         wandb.define_metric(
             f"{namespace}/*",
             step_metric="train/global_step",

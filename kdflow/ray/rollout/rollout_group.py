@@ -36,6 +36,7 @@ SGLANG_ENV_VARS = {
     "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
     "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
     "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
+    "SGLANG_RETURN_ORIGINAL_LOGPROB": "1",
 }
 
 
@@ -239,6 +240,7 @@ class RolloutActorGroup:
         payload = {
             "text": prompt,
             "sampling_params": sampling_params,
+            "return_logprob": True,
         }
         if self.active_lora_name is not None:
             payload["lora_path"] = self.active_lora_name

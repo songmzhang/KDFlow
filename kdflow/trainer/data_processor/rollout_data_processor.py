@@ -151,38 +151,57 @@ class RolloutDataProcessor:
         processor,
         prefix: str,
         images=None,
+        response_ids: Optional[List[int]] = None,
+        append_eos: bool = True,
     ) -> Dict[str, Any]:
         """Tokenize prompt and response for a single sample."""
         tokenizer = getattr(processor, "tokenizer", processor)
-        response_tokens = tokenizer(
-            response, return_tensors="pt", add_special_tokens=False
-        )
-        response_length = response_tokens["input_ids"].shape[1]
+        if response_ids is not None:
+            model_input = {"text": prompt}
+            if images:
+                model_input["images"] = images
+            tokens = processor(
+                **model_input, return_tensors="pt", add_special_tokens=False
+            )
+            prompt_length = tokens["input_ids"].shape[1]
+            response_input_ids = tokens["input_ids"].new_tensor(response_ids)
+            input_ids = torch.cat(
+                [tokens["input_ids"][0], response_input_ids]
+            )
+            attention_mask = torch.cat(
+                [
+                    tokens["attention_mask"][0],
+                    tokens["attention_mask"][0].new_ones(len(response_ids)),
+                ]
+            )
+            target_length = len(response_ids)
+        else:
+            response_tokens = tokenizer(
+                response, return_tensors="pt", add_special_tokens=False
+            )
+            response_length = response_tokens["input_ids"].shape[1]
+            model_input = {"text": prompt + response}
+            if images:
+                model_input["images"] = images
+            tokens = processor(
+                **model_input, return_tensors="pt", add_special_tokens=False
+            )
+            prompt_length = tokens["input_ids"].shape[1] - response_length
+            input_ids = tokens["input_ids"][0]
+            attention_mask = tokens["attention_mask"][0]
+            target_length = response_length
+            if append_eos:
+                input_ids = torch.cat(
+                    [input_ids, input_ids.new_tensor([tokenizer.eos_token_id])]
+                )
+                attention_mask = torch.cat(
+                    [attention_mask, attention_mask.new_ones(1)]
+                )
+                target_length += 1
 
-        full_input = {"text": prompt + response}
-        if images:
-            full_input["images"] = images
-        full_tokens = processor(
-            **full_input, return_tensors="pt", add_special_tokens=False
-        )
-        prompt_length = full_tokens["input_ids"].shape[1] - response_length
-
-        eos_token_id = tokenizer.eos_token_id
-        input_ids = torch.cat(
-            [
-                full_tokens["input_ids"][0],
-                full_tokens["input_ids"][0].new_tensor([eos_token_id]),
-            ]
-        )
-        attention_mask = torch.cat(
-            [
-                full_tokens["attention_mask"][0],
-                full_tokens["attention_mask"][0].new_ones(1),
-            ]
-        )
         loss_mask = torch.tensor(
             [False] * (prompt_length - 1)
-            + [True] * (response_length + 1)
+            + [True] * target_length
             + [False],
             device=input_ids.device,
         )
@@ -195,7 +214,7 @@ class RolloutDataProcessor:
         }
         multi_modal_inputs = {
             key: torch.as_tensor(value)
-            for key, value in full_tokens.items()
+            for key, value in tokens.items()
             if key not in ("input_ids", "attention_mask", "mm_token_type_ids")
         }
         if multi_modal_inputs:
@@ -222,6 +241,15 @@ class RolloutDataProcessor:
         """Build a rollout sample with student and teacher tokenizations."""
         response_ids = output["output_ids"]
         response_text = output["text"]
+        output_token_logprobs = output["meta_info"]["output_token_logprobs"]
+        output_log_probs = [item[0] for item in output_token_logprobs]
+        output_logprob_ids = [item[1] for item in output_token_logprobs]
+        student_tokenizer = getattr(
+            self.student_processor, "tokenizer", self.student_processor
+        )
+        response_has_eos = (
+            bool(response_ids) and response_ids[-1] == student_tokenizer.eos_token_id
+        )
 
         stu_tokens = self._tokenize_sample(
             stu_prompt,
@@ -229,6 +257,23 @@ class RolloutDataProcessor:
             self.student_processor,
             "stu",
             images=images,
+            response_ids=response_ids,
+        )
+        stu_loss_mask = stu_tokens["stu_loss_mask"].bool()
+        stu_label_ids = stu_tokens["stu_input_ids"].roll(shifts=-1)[
+            stu_loss_mask
+        ]
+        if (
+            output_logprob_ids != response_ids
+            or output_logprob_ids != stu_label_ids.tolist()
+        ):
+            raise ValueError("Rollout and student token IDs are not aligned")
+
+        rollout_log_probs = torch.zeros_like(
+            stu_tokens["stu_input_ids"], dtype=torch.float32
+        )
+        rollout_log_probs[stu_loss_mask] = torch.tensor(
+            output_log_probs, dtype=torch.float32
         )
 
         if not self.is_same_tokenizer or tea_prompt != stu_prompt:
@@ -239,6 +284,7 @@ class RolloutDataProcessor:
                 teacher_processor,
                 "tea",
                 images=images,
+                append_eos=response_has_eos,
             )
         else:
             tea_tokens = {
@@ -257,7 +303,9 @@ class RolloutDataProcessor:
             feed_ids = tokenizer(
                 tea_prompt + response_text, add_special_tokens=False
             )["input_ids"]
-            tea_feed_input_ids = feed_ids + [tokenizer.eos_token_id]
+            tea_feed_input_ids = feed_ids
+            if response_has_eos:
+                tea_feed_input_ids.append(tokenizer.eos_token_id)
         else:
             tea_feed_input_ids = tea_tokens["tea_input_ids"].tolist()
 
@@ -265,7 +313,7 @@ class RolloutDataProcessor:
             **{key: value for key, value in tea_tokens.items() if not key.startswith("_")},
             **{key: value for key, value in stu_tokens.items() if not key.startswith("_")},
             "tea_feed_input_ids": [tea_feed_input_ids],
-            "rollout_log_probs": None,
+            "rollout_log_probs": rollout_log_probs,
             "stu_prompts": [stu_prompt],
             "stu_responses": [response_text],
             "tea_prompts": [tea_prompt],

@@ -1,11 +1,14 @@
+from functools import partial
+
 import torch
 
-from kdflow.loss import build_loss_fn
 from kdflow.algorithms import register_algorithm
+from kdflow.loss import build_loss_fn
 from kdflow.loss.chunked_loss import chunked_loss
 from kdflow.loss.cross_entropy import compute_cross_entropy
-from kdflow.metrics.topk_token_overlap import compute_topk_token_overlap_ratios
 from kdflow.metrics.entropy import compute_entropy
+from kdflow.metrics.rollout_consistency import compute_rollout_consistency
+from kdflow.metrics.topk_token_overlap import compute_topk_token_overlap_ratios
 
 
 @register_algorithm("vanilla_kd")
@@ -82,6 +85,21 @@ class VanillaKD:
         student_hiddens = output["hidden_states"][-1][student_loss_mask]
         del output
 
+        student_label_ids = student_input_ids.roll(shifts=-1, dims=1)[
+            student_loss_mask
+        ]
+        metric_fns = self.metric_fns
+        rollout_log_probs = micro_batch.get("rollout_log_probs")
+        if rollout_log_probs is not None:
+            metric_fns = [
+                *metric_fns,
+                partial(
+                    compute_rollout_consistency,
+                    labels=student_label_ids,
+                    rollout_log_probs=rollout_log_probs[student_loss_mask],
+                ),
+            ]
+
         # Non-chunked case can be regarded as a special case of chunked loss (i.e., chunk_size = seq_len)
         chunk_size = self.args.train.chunked_loss_size or student_hiddens.shape[0]
 
@@ -92,7 +110,7 @@ class VanillaKD:
             kd_loss, metric_sums = chunked_loss(
                 student_hiddens, self.student.model.lm_head, self.loss_fn,
                 teacher_logits_fn=teacher_logits_fn, chunk_size=chunk_size, reduction="sum",
-                metric_fns=self.metric_fns, return_metrics=True,
+                metric_fns=metric_fns, return_metrics=True,
             )
         else:
             teacher_hiddens = teacher_hiddens.to(self.teacher_lm_head.weight)
@@ -100,14 +118,13 @@ class VanillaKD:
                 student_hiddens, self.student.model.lm_head, self.loss_fn,
                 teacher_hidden=teacher_hiddens, teacher_head=self.teacher_lm_head,
                 chunk_size=chunk_size, reduction="sum",
-                metric_fns=self.metric_fns, return_metrics=True,
+                metric_fns=metric_fns, return_metrics=True,
             )
         kd_loss = kd_loss / avg_token_num
         loss_info = {"train/loss": kd_loss, "train/kd_loss": kd_loss}
         loss_info.update({key: value / avg_token_num for key, value in metric_sums.items()})
 
         if self.args.kd.kd_ratio < 1:
-            student_label_ids = student_input_ids.roll(shifts=-1, dims=1)[student_loss_mask]
             ce_loss = chunked_loss(
                 student_hiddens, self.student.model.lm_head, compute_cross_entropy,
                 label=student_label_ids, chunk_size=chunk_size, reduction="sum"

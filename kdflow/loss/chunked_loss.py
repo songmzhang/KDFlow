@@ -1,5 +1,6 @@
 from collections import defaultdict
 from typing import Any, Callable, List, Optional, Union
+
 import torch
 
 
@@ -63,7 +64,13 @@ def chunked_loss(
         if metric_fns is not None and has_teacher_logits:
             fns = metric_fns if isinstance(metric_fns, list) else [metric_fns]
             for fn in fns:
-                for key, value in fn(student_logits=student_logits, teacher_logits=target).items():
+                metrics = fn(
+                    student_logits=student_logits,
+                    teacher_logits=target,
+                    start=start,
+                    end=end,
+                )
+                for key, value in metrics.items():
                     metric_sums[key] += value * chunk_tokens
         if reduction == "none":
             losses.append(chunk_loss)

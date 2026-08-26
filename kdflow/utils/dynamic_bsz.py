@@ -24,7 +24,8 @@ logger = init_logger(__name__)
 
 # Keys whose tensors are 2-D [batch, seq_len] and need unpad / repad
 _SEQ_KEYS = {"stu_input_ids", "stu_attn_mask", "stu_loss_mask",
-             "tea_input_ids", "tea_attn_mask", "tea_loss_mask"}
+             "tea_input_ids", "tea_attn_mask", "tea_loss_mask",
+             "rollout_log_probs"}
 
 # Keys whose tensors are 1-D scalars per sample (e.g. response_length)
 _SCALAR_KEYS = {"response_length", "total_length"}
