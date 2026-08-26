@@ -315,63 +315,41 @@ class SFTDataset(Dataset):
         if "tea_prompt" in item_list[0]:
             if not self.teacher_student_share_input:
                 tea_full = [item["tea_prompt"] + item["tea_response"] for item in item_list]
-                # Select per-sample teacher processor for encoding
                 tea_encs = []
                 for i in range(bsz):
                     if self.args.kd.multi_teacher_config and "teacher_routing_key" in item_list[i]:
                         proc = self.teacher_processors[item_list[i]["teacher_routing_key"]]
                     else:
                         proc = self.teacher_processors.get("default", self.student_processor)
-                    tea_encs.append(self._encode_single(proc, tea_full[i], per_sample_images[i]))
+                    tokenizer = getattr(proc, "tokenizer", proc)
+                    tea_encs.append(self._encode_single(tokenizer, tea_full[i]))
                 if self.args.kd.multi_teacher_config:
-                    # Multi-teacher mode validates shared vocab with the student.
                     tea_pad_id = self.student_tokenizer.pad_token_id
                 else:
                     teacher_processor = self.teacher_processors.get("default", self.student_processor)
                     teacher_tokenizer = getattr(teacher_processor, "tokenizer", teacher_processor)
                     tea_pad_id = teacher_tokenizer.pad_token_id
-                tea_input_ids = zero_pad_sequences(
-                    [e["input_ids"] for e in tea_encs], side="right", value=tea_pad_id,
-                )
-                tea_attn_mask = zero_pad_sequences(
-                    [e["attention_mask"] for e in tea_encs], side="right", value=0,
-                ).long()
-                batch["tea_input_ids"] = tea_input_ids
-                batch["tea_attn_mask"] = tea_attn_mask
-                batch["tea_loss_mask"] = self._build_loss_mask(
-                    tea_attn_mask, [item["tea_resp_len"] for item in item_list],
-                )
-                if any(e["multi_modal_inputs"] is not None for e in tea_encs):
-                    batch["tea_multi_modal_inputs"] = [e["multi_modal_inputs"] for e in tea_encs]
-            else:
-                batch["tea_input_ids"] = batch["stu_input_ids"]
-                batch["tea_attn_mask"] = batch["stu_attn_mask"]
-                batch["tea_loss_mask"] = batch["stu_loss_mask"]
-                if "stu_multi_modal_inputs" in batch:
-                    batch["tea_multi_modal_inputs"] = batch["stu_multi_modal_inputs"]
-
-            # Teacher feed input_ids for SGLang. Text: reuse encoded ids (exact).
-            # Multimodal: tokenize raw text (single image placeholder) so SGLang re-expands it.
-            if not self.teacher_student_share_input:
-                if self.image_key:
-                    tea_feed = []
-                    for i in range(bsz):
-                        if self.args.kd.multi_teacher_config and "teacher_routing_key" in item_list[i]:
-                            proc = self.teacher_processors[item_list[i]["teacher_routing_key"]]
-                        else:
-                            proc = self.teacher_processors.get("default", self.student_processor)
-                        tokenizer = getattr(proc, "tokenizer", proc)
-                        tea_feed.append(tokenizer(tea_full[i])["input_ids"])
-                    batch["tea_feed_input_ids"] = tea_feed
-                else:
-                    batch["tea_feed_input_ids"] = [e["input_ids"].tolist() for e in tea_encs]
             else:
                 if self.image_key:
-                    batch["tea_feed_input_ids"] = [
-                        self.student_tokenizer(stu_full[i])["input_ids"] for i in range(bsz)
+                    tea_encs = [
+                        self._encode_single(self.student_tokenizer, text)
+                        for text in stu_full
                     ]
                 else:
-                    batch["tea_feed_input_ids"] = [e["input_ids"].tolist() for e in stu_encs]
+                    tea_encs = stu_encs
+                tea_pad_id = self.student_tokenizer.pad_token_id
+
+            tea_input_ids = zero_pad_sequences(
+                [e["input_ids"] for e in tea_encs], side="right", value=tea_pad_id,
+            )
+            tea_attn_mask = zero_pad_sequences(
+                [e["attention_mask"] for e in tea_encs], side="right", value=0,
+            ).long()
+            batch["tea_input_ids"] = tea_input_ids
+            batch["tea_attn_mask"] = tea_attn_mask
+            batch["tea_loss_mask"] = self._build_loss_mask(
+                tea_attn_mask, [item["tea_resp_len"] for item in item_list],
+            )
 
         if self.image_key:
             batch["images"] = per_sample_images

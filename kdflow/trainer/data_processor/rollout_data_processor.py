@@ -276,58 +276,26 @@ class RolloutDataProcessor:
             output_log_probs, dtype=torch.float32
         )
 
-        if self.is_same_tokenizer and tea_prompt == stu_prompt:
-            tea_tokens = {
-                "tea_input_ids": stu_tokens["stu_input_ids"].clone(),
-                "tea_attn_mask": stu_tokens["stu_attn_mask"].clone(),
-                "tea_loss_mask": stu_tokens["stu_loss_mask"].clone(),
-            }
-        elif self.is_same_tokenizer:
-            tea_tokens = self._tokenize_sample(
-                tea_prompt,
-                response_text,
-                self.student_processor,
-                "tea",
-                images=images,
-                response_ids=response_ids,
-            )
-        else:
-            teacher_processor = self._get_teacher_processor(teacher_routing_key)
-            tea_tokens = self._tokenize_sample(
-                tea_prompt,
-                response_text,
-                teacher_processor,
-                "tea",
-                images=images,
-                append_eos=response_has_eos,
-            )
+        teacher_processor = self._get_teacher_processor(teacher_routing_key)
+        teacher_tokenizer = getattr(
+            teacher_processor, "tokenizer", teacher_processor
+        )
+        tea_tokens = self._tokenize_sample(
+            tea_prompt,
+            response_text,
+            teacher_tokenizer,
+            "tea",
+            response_ids=response_ids if self.is_same_tokenizer else None,
+            append_eos=response_has_eos,
+        )
 
         prompt_length = stu_tokens["_stu_prompt_length"]
         response_length = len(response_ids)
         total_length = stu_tokens["stu_attn_mask"].sum().item()
 
-        teacher_processor = self._get_teacher_processor(teacher_routing_key)
-        tokenizer = getattr(teacher_processor, "tokenizer", teacher_processor)
-        if images:
-            # tea_feed_input_ids will be sent to SGLang engine and only contains one <image_pad_id>
-            if self.is_same_tokenizer:
-                prompt_ids = tokenizer(
-                    tea_prompt, add_special_tokens=False
-                )["input_ids"]
-                tea_feed_input_ids = prompt_ids + response_ids
-            else:
-                tea_feed_input_ids = tokenizer(
-                    tea_prompt + response_text, add_special_tokens=False
-                )["input_ids"]
-                if response_has_eos:
-                    tea_feed_input_ids.append(tokenizer.eos_token_id)
-        else:
-            tea_feed_input_ids = tea_tokens["tea_input_ids"].tolist()
-
         sample = {
             **{key: value for key, value in tea_tokens.items() if not key.startswith("_")},
             **{key: value for key, value in stu_tokens.items() if not key.startswith("_")},
-            "tea_feed_input_ids": [tea_feed_input_ids],
             "rollout_log_probs": rollout_log_probs,
             "stu_prompts": [stu_prompt],
             "stu_responses": [response_text],

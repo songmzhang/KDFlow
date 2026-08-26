@@ -174,13 +174,14 @@ def _handle_generate(engine, request, hidden_queue, response_queue):
             mask_len = mask.shape[0]
             if hs_len == mask_len:
                 hs_np = hs_np[mask]
-            else:
+            else:  # for multimodal data
                 num_loss_tokens = int(mask.sum())
-                logger.warning(
-                    f"[_handle_generate] sample={idx}/{num_samples} length mismatch: "
-                    f"hs_len={hs_len}, mask_len={mask_len}, diff={mask_len - hs_len}; "
-                    f"selecting {num_loss_tokens} loss tokens from the tail"
-                )
+                if kwargs.get("image_data") is None:
+                    logger.warning(
+                        f"[_handle_generate] sample={idx}/{num_samples} length mismatch: "
+                        f"hs_len={hs_len}, mask_len={mask_len}, diff={mask_len - hs_len}; "
+                        f"selecting {num_loss_tokens} loss tokens from the tail"
+                    )
                 if num_loss_tokens >= hs_len:
                     raise ValueError(
                         f"Cannot select {num_loss_tokens} loss tokens from "

@@ -107,12 +107,21 @@ class TeacherRayActor:
 
         batches = [global_batch[i] for i in batch_indices]
         
-        # Collect teacher feed input_ids and loss masks (token ids avoid a re-tokenize round trip).
-        input_ids = sum((micro_batch["tea_feed_input_ids"] for micro_batch in batches), [])
+        input_ids = []
         unpadded_loss_masks = []
         for micro_batch in batches:
-            attn_mask, loss_mask = micro_batch["tea_attn_mask"], micro_batch["tea_loss_mask"]
-            unpadded_loss_masks.extend(remove_pad_token(loss_mask, attn_mask, return_tensors=True))
+            attn_mask = micro_batch["tea_attn_mask"]
+            input_ids.extend(
+                remove_pad_token(
+                    micro_batch["tea_input_ids"],
+                    attn_mask,
+                    return_tensors=False,
+                )
+            )
+            loss_mask = micro_batch["tea_loss_mask"]
+            unpadded_loss_masks.extend(
+                remove_pad_token(loss_mask, attn_mask, return_tensors=True)
+            )
         unpadded_loss_masks = [m.numpy().astype(bool) for m in unpadded_loss_masks]
         
         # Collect image data if present

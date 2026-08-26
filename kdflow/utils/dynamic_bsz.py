@@ -31,7 +31,7 @@ _SEQ_KEYS = {"stu_input_ids", "stu_attn_mask", "stu_loss_mask",
 _SCALAR_KEYS = {"response_length", "total_length"}
 
 # Keys that are plain python lists (one element per sample)
-_LIST_KEYS = {"tea_feed_input_ids", "stu_prompts", "stu_responses", "tea_prompts",
+_LIST_KEYS = {"stu_prompts", "stu_responses", "tea_prompts",
               "labels", "images", "stu_multi_modal_inputs", "tea_multi_modal_inputs",
               "teacher_routing_key"}
 
