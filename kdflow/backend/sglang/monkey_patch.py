@@ -256,9 +256,50 @@ def process_batch_result_prefill_patched(
         )
 
 
+def append_prefill_hidden_states_patched(
+    self,
+    *,
+    req,
+    logits_output,
+    hidden_state_offset: int,
+    capture_hidden_mode,
+    extend_input_len: int,
+    store: bool = True,
+) -> int:
+    """SGLang 0.5.17+ hidden-state conversion using NumPy instead of lists."""
+    if capture_hidden_mode.is_full():
+        start = hidden_state_offset
+        hidden_state_offset += extend_input_len
+        if not store or not req.return_hidden_states:
+            return hidden_state_offset
+
+        req_hidden_states = logits_output.hidden_states[start:hidden_state_offset]
+        if req.return_hidden_states is True:
+            req.hidden_states.append(
+                req_hidden_states.detach().half().cpu().numpy()
+            )
+        elif req.return_hidden_states == "last":
+            req.hidden_states.append(
+                req_hidden_states[-1].detach().half().cpu().numpy()
+            )
+    elif capture_hidden_mode.is_last():
+        index = hidden_state_offset
+        hidden_state_offset += 1
+        if store and req.return_hidden_states:
+            req.hidden_states.append(
+                logits_output.hidden_states[index].detach().half().cpu().numpy()
+            )
+    else:
+        raise ValueError(
+            f"Unexpected hidden states capture mode: {capture_hidden_mode}"
+        )
+
+    return hidden_state_offset
+
+
 def apply_patch():
     """
-    Apply the monkey patch to SGLang's SchedulerOutputProcessorMixin.
+    Apply the hidden-state conversion patch across supported SGLang layouts.
     
     This function is idempotent - calling it multiple times is safe.
     Returns True if patch was applied (or already applied), False otherwise.
@@ -269,6 +310,47 @@ def apply_patch():
         return True
     
     try:
+        try:
+            from sglang.srt.managers.scheduler_components.batch_result_processor import (
+                SchedulerBatchResultProcessor,
+            )
+        except ModuleNotFoundError:
+            SchedulerBatchResultProcessor = None
+
+        if SchedulerBatchResultProcessor is not None:
+            current_method = getattr(
+                SchedulerBatchResultProcessor,
+                "_append_prefill_hidden_states",
+                None,
+            )
+            if current_method is None:
+                print(
+                    "[monkey_patch] SGLang SchedulerBatchResultProcessor has no "
+                    "_append_prefill_hidden_states method",
+                    flush=True,
+                )
+                return False
+            if getattr(current_method, "_kdflow_patched", False):
+                _PATCH_APPLIED = True
+                print(
+                    f"[monkey_patch] Patch already applied, PID={os.getpid()}",
+                    flush=True,
+                )
+                return True
+
+            append_prefill_hidden_states_patched._kdflow_patched = True
+            SchedulerBatchResultProcessor._append_prefill_hidden_states = (
+                append_prefill_hidden_states_patched
+            )
+
+            _PATCH_APPLIED = True
+            print(
+                "[monkey_patch] SUCCESS: SchedulerBatchResultProcessor."
+                f"_append_prefill_hidden_states patched! PID={os.getpid()}",
+                flush=True,
+            )
+            return True
+
         from sglang.srt.managers.scheduler_output_processor_mixin import (
             SchedulerOutputProcessorMixin,
         )

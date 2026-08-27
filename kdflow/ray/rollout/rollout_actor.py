@@ -3,6 +3,7 @@ RolloutActor: A Ray remote actor that manages a single SGLang HTTP server instan
 Port allocation is done centrally by RolloutGroup via _get_current_node_ip_and_free_port().
 """
 
+import dataclasses
 import ipaddress
 import multiprocessing
 import socket
@@ -93,6 +94,17 @@ class RolloutRayActor:
 
         if extra_server_args:
             server_args_dict.update(extra_server_args)
+
+        server_arg_field_names = {field.name for field in dataclasses.fields(ServerArgs)}
+        if (
+            "cuda_graph_backend_prefill" in server_arg_field_names
+            and server_args_dict.get("enable_memory_saver")
+            and server_args_dict.get("cuda_graph_backend_prefill") is None
+        ):
+            # Breakable prefill CUDA Graph is incompatible with memory saver.
+            server_args_dict["cuda_graph_backend_prefill"] = "disabled"
+
+        server_args_dict["host"] = server_args_dict["host"].strip("[]")
 
         self.node_rank = server_args_dict.get("node_rank", 0)
 
@@ -321,7 +333,6 @@ class RolloutRayActor:
         from sglang.srt.entrypoints.http_server import launch_server
 
         multiprocessing.set_start_method("spawn", force=True)
-        server_args.host = server_args.host.strip("[]")
         p = multiprocessing.Process(target=launch_server, args=(server_args,))
         p.start()
 

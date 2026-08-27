@@ -167,7 +167,15 @@ def _handle_generate(engine, request, hidden_queue, response_queue):
                 raise RuntimeError(f"Duplicate SGLang output index: {idx}")
 
             mask = kwargs["loss_masks"][idx]
-            hs_np = meta_info["hidden_states"][0]
+            hidden_states = meta_info.get("hidden_states")
+            if not hidden_states:
+                raise RuntimeError(
+                    "SGLang returned an empty hidden_states result "
+                    f"(index={idx}, finish_reason={meta_info.get('finish_reason')}, "
+                    f"prompt_tokens={meta_info.get('prompt_tokens')}, "
+                    f"completion_tokens={meta_info.get('completion_tokens')})"
+                )
+            hs_np = hidden_states[0]
 
             # hs_np and mask may differ due to multimodal token expansion.
             hs_len = hs_np.shape[0]

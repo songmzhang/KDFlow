@@ -51,6 +51,7 @@ class SFTDataset(Dataset):
         self.enable_thinking = getattr(self.args.model, "enable_thinking", False)
 
         self.image_key = getattr(self.args.data, "image_key", None)
+        self.is_multi_teacher_kd = self.args.kd.multi_teacher_config is not None
         self.same_tokenizer = True if tokenizer_info is None else self.tokenizer_info.is_identical
         self.teacher_student_share_input = self.same_tokenizer and (self.teacher_input_key == self.input_key)
 
@@ -62,11 +63,11 @@ class SFTDataset(Dataset):
             required_columns["image_key"] = self.image_key
         has_teacher = (
             self.args.model.teacher_name_or_path is not None
-            or self.args.kd.multi_teacher_config is not None
+            or self.is_multi_teacher_kd
         )
         if has_teacher and self.teacher_input_key != self.input_key:
             required_columns["teacher_input_key"] = self.teacher_input_key
-        if self.args.kd.multi_teacher_config:
+        if self.is_multi_teacher_kd:
             required_columns["teacher_routing_key"] = self.args.data.teacher_routing_key
         validate_dataset_columns(dataset, **required_columns)
         
@@ -77,7 +78,7 @@ class SFTDataset(Dataset):
         # extract tokenizer in hf processor
         self.student_tokenizer = getattr(self.student_processor, "tokenizer", self.student_processor)
         self.teacher_processors = {}
-        if self.args.kd.multi_teacher_config:
+        if self.is_multi_teacher_kd:
             for teacher_key, teacher_path in self.args.kd.multi_teacher_config.items():
                 self.teacher_processors[teacher_key] = get_tokenizer_or_processor(
                     teacher_path, need_processor=self.image_key is not None,
@@ -152,11 +153,10 @@ class SFTDataset(Dataset):
         if self.image_key is not None:
             result["images"] = self.load_images(data[self.image_key])
 
-        if self.args.model.teacher_name_or_path is not None \
-        or self.args.kd.multi_teacher_config is not None:
+        if self.args.model.teacher_name_or_path is not None or self.is_multi_teacher_kd:
             if not self.teacher_student_share_input:
                 # Select the appropriate teacher processor
-                if self.args.kd.multi_teacher_config is not None:
+                if self.is_multi_teacher_kd:
                     routing_key = self.args.data.teacher_routing_key
                     assert routing_key is not None, "`--teacher_routing_key` must be specified when using multi_teacher_config"
                     assert routing_key in data, f"Routing key '{routing_key}' not found in data"
@@ -188,7 +188,7 @@ class SFTDataset(Dataset):
                 result["tea_resp_len"] = result["stu_resp_len"]
 
         # load teacher routing info of each data for multi-teacher distillation
-        if self.args.kd.multi_teacher_config is not None:
+        if self.is_multi_teacher_kd:
             assert self.args.data.teacher_routing_key is not None, "`--teacher_routing_key` must be specified when using multi_teacher_config"
             assert self.args.data.teacher_routing_key in data, f"Routing key '{self.args.data.teacher_routing_key}' not found in data"
             result["teacher_routing_key"] = data[self.args.data.teacher_routing_key]
@@ -256,6 +256,15 @@ class SFTDataset(Dataset):
         tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else processor
         return len(tokenizer.encode(text, add_special_tokens=False))
 
+    def _get_teacher_tokenizer(self, item):
+        teacher_key = item.get("teacher_routing_key")
+        processor = (
+            self.teacher_processors[teacher_key]
+            if teacher_key is not None
+            else self.teacher_processors.get("default", self.student_processor)
+        )
+        return getattr(processor, "tokenizer", processor)
+
     def _encode_single(self, processor, text, images=None) -> Dict[str, Any]:
         """Single-sample processor call."""
         kwargs = {"text": [text], "padding": False, "truncation": False,
@@ -270,6 +279,29 @@ class SFTDataset(Dataset):
             "attention_mask": enc["attention_mask"][0],
             "multi_modal_inputs": multi_modal_inputs or None,
         }
+
+    def _encode_teacher_batch(self, item_list, stu_full, stu_encodings):
+        if self.teacher_student_share_input and not self.image_key:
+            return stu_encodings, self.student_tokenizer.pad_token_id
+
+        if self.teacher_student_share_input:
+            texts = stu_full
+            tokenizers = [self.student_tokenizer] * len(item_list)
+        else:
+            texts = [item["tea_prompt"] + item["tea_response"] for item in item_list]
+            tokenizers = [self._get_teacher_tokenizer(item) for item in item_list]
+
+        encodings = [
+            self._encode_single(tokenizer, text)
+            for tokenizer, text in zip(tokenizers, texts)
+        ]
+        if self.is_multi_teacher_kd:
+            pad_id = self.student_tokenizer.pad_token_id
+        elif self.teacher_student_share_input:
+            pad_id = self.student_tokenizer.pad_token_id
+        else:
+            pad_id = tokenizers[0].pad_token_id
+        return encodings, pad_id
 
     @staticmethod
     def _build_loss_mask(attn_mask, resp_lens):
@@ -289,16 +321,16 @@ class SFTDataset(Dataset):
         )
 
         stu_full = [item["stu_prompt"] + item["stu_response"] for item in item_list]
-        stu_encs = [
+        stu_encodings = [
             self._encode_single(self.student_processor, stu_full[i], per_sample_images[i])
             for i in range(bsz)
         ]
         stu_pad_id = self.student_tokenizer.pad_token_id
         stu_input_ids = zero_pad_sequences(
-            [e["input_ids"] for e in stu_encs], side="right", value=stu_pad_id,
+            [e["input_ids"] for e in stu_encodings], side="right", value=stu_pad_id,
         )
         stu_attn_mask = zero_pad_sequences(
-            [e["attention_mask"] for e in stu_encs], side="right", value=0,
+            [e["attention_mask"] for e in stu_encodings], side="right", value=0,
         ).long()
         stu_loss_mask = self._build_loss_mask(
             stu_attn_mask, [item["stu_resp_len"] for item in item_list],
@@ -309,41 +341,19 @@ class SFTDataset(Dataset):
             "stu_attn_mask": stu_attn_mask,
             "stu_loss_mask": stu_loss_mask,
         }
-        if any(e["multi_modal_inputs"] is not None for e in stu_encs):
-            batch["stu_multi_modal_inputs"] = [e["multi_modal_inputs"] for e in stu_encs]
+        if any(e["multi_modal_inputs"] is not None for e in stu_encodings):
+            batch["stu_multi_modal_inputs"] = [e["multi_modal_inputs"] for e in stu_encodings]
 
         if "tea_prompt" in item_list[0]:
-            if not self.teacher_student_share_input:
-                tea_full = [item["tea_prompt"] + item["tea_response"] for item in item_list]
-                tea_encs = []
-                for i in range(bsz):
-                    if self.args.kd.multi_teacher_config and "teacher_routing_key" in item_list[i]:
-                        proc = self.teacher_processors[item_list[i]["teacher_routing_key"]]
-                    else:
-                        proc = self.teacher_processors.get("default", self.student_processor)
-                    tokenizer = getattr(proc, "tokenizer", proc)
-                    tea_encs.append(self._encode_single(tokenizer, tea_full[i]))
-                if self.args.kd.multi_teacher_config:
-                    tea_pad_id = self.student_tokenizer.pad_token_id
-                else:
-                    teacher_processor = self.teacher_processors.get("default", self.student_processor)
-                    teacher_tokenizer = getattr(teacher_processor, "tokenizer", teacher_processor)
-                    tea_pad_id = teacher_tokenizer.pad_token_id
-            else:
-                if self.image_key:
-                    tea_encs = [
-                        self._encode_single(self.student_tokenizer, text)
-                        for text in stu_full
-                    ]
-                else:
-                    tea_encs = stu_encs
-                tea_pad_id = self.student_tokenizer.pad_token_id
+            tea_encodings, tea_pad_id = self._encode_teacher_batch(
+                item_list, stu_full, stu_encodings
+            )
 
             tea_input_ids = zero_pad_sequences(
-                [e["input_ids"] for e in tea_encs], side="right", value=tea_pad_id,
+                [e["input_ids"] for e in tea_encodings], side="right", value=tea_pad_id,
             )
             tea_attn_mask = zero_pad_sequences(
-                [e["attention_mask"] for e in tea_encs], side="right", value=0,
+                [e["attention_mask"] for e in tea_encodings], side="right", value=0,
             ).long()
             batch["tea_input_ids"] = tea_input_ids
             batch["tea_attn_mask"] = tea_attn_mask

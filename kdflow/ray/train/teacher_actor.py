@@ -132,7 +132,7 @@ class TeacherRayActor:
         hidden_states_list = self.engine_service.generate(
             input_ids=input_ids,
             loss_masks=unpadded_loss_masks,
-            sampling_params={"max_new_tokens": 0},
+            sampling_params={"max_new_tokens": 1},   # To support SGLang 0.5.17
             return_hidden_states=True,
             image_data=image_data,
         )
