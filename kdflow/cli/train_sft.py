@@ -113,7 +113,7 @@ def train(args):
     trainer.fit(global_step, start_epoch)
 
     # save model checkpoint after fitting on only rank0
-    strategy.save_model(student, student.tokenizer, args.train.save_path)
+    strategy.save_model(student, args.train.save_path)
     strategy.log("Training completed and model saved.")
 
 

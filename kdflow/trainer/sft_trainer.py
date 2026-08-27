@@ -174,11 +174,11 @@ class SFTTrainer:
                 if self.global_step % self.args.train.save_steps == 0:
                     self.strategy.log(f"Saving model at global step {self.global_step}")
                     save_path = os.path.join(self.args.train.save_path, f"epoch_{epoch + 1}_global_step_{self.global_step}")
-                    self.strategy.save_model(self.student, self.student.tokenizer, save_path)
+                    self.strategy.save_model(self.student, save_path)
 
             self.strategy.log(f"Saving model after epoch {epoch + 1}")
             save_path = os.path.join(self.args.train.save_path, f"epoch_{epoch + 1}")
-            self.strategy.save_model(self.student, self.student.tokenizer, save_path)
+            self.strategy.save_model(self.student, save_path)
 
         total_time = time.time() - self.start_time
         self.strategy.log(f"Training done, totally cost {str(timedelta(seconds=total_time)).split('.')[0]}")

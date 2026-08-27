@@ -5,9 +5,13 @@ import torch.distributed as dist
 import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
-from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoConfig
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+)
 
-from kdflow.utils import get_tokenizer
+from kdflow.datasets.utils import get_tokenizer_or_processor
 from kdflow.models.ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
 
 
@@ -75,7 +79,18 @@ class DistillModel(nn.Module):
             )
             self.model = get_peft_model(self.model, lora_config)
 
-        self.tokenizer = get_tokenizer(model_name_or_path, self.model)
+        processor_or_tokenizer = get_tokenizer_or_processor(
+            model_name_or_path,
+            self.model,
+            padding_side="right",
+            need_processor=self.is_vl_model,
+        )
+        if self.is_vl_model:
+            self.processor = processor_or_tokenizer
+            self.tokenizer = self.processor.tokenizer
+        else:
+            self.processor = None
+            self.tokenizer = processor_or_tokenizer
 
         # https://github.com/huggingface/transformers/issues/26877
         # Use `model.generate(use_cache=True)` instead.`

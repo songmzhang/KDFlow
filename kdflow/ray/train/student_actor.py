@@ -405,7 +405,7 @@ class StudentRayActor:
         """Save model checkpoint after fitting on only rank0."""
         if save_path is None:
             save_path = self.args.train.save_path
-        self.strategy.save_model(self.student, self.student.tokenizer, save_path)
+        self.strategy.save_model(self.student, save_path)
 
     def get_checkpoint_states(self):
         return self.checkpoint_states
@@ -439,7 +439,7 @@ class StudentRayActor:
         )
         if self.save_hf_ckpt:
             save_path = os.path.join(self.args.train.ckpt_path, f"{tag}_hf")
-            self.strategy.save_model(self.student, self.student.tokenizer, save_path)
+            self.strategy.save_model(self.student, save_path)
         # wait
         torch_dist_barrier_and_cuda_sync()
         

@@ -385,7 +385,17 @@ class FSDP2Strategy(ABC):
         options = StateDictOptions(full_state_dict=True, cpu_offload=True)
         set_model_state_dict(model_to_load, model_state_dict=state_dict, options=options)
     
-    def save_model(self, model: nn.Module, tokenizer, output_dir, **kwargs) -> None:
+    def save_model(self, model: nn.Module, output_dir, **kwargs) -> None:
+        if hasattr(model, "module"):
+            model = model.module
+            
+        processor = getattr(model, "processor", None)
+        processor_or_tokenizer = (
+            processor
+            if processor is not None
+            else getattr(model, "tokenizer", None)
+        )
+
         model_to_save = self._unwrap_model(model)
         
         if self.is_rank_0():
@@ -412,10 +422,10 @@ class FSDP2Strategy(ABC):
             else:
                 model_to_save.save_pretrained(output_dir, state_dict=state_dict, **kwargs)
             
-            # Config & Tokenizer
+            # Config and processor/tokenizer
             output_config_file = os.path.join(output_dir, "config.json")
             model_to_save.config.to_json_file(output_config_file)
-            tokenizer.save_pretrained(output_dir)
+            processor_or_tokenizer.save_pretrained(output_dir)
 
         del state_dict
         gc.collect()
