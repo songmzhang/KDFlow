@@ -13,6 +13,21 @@ def compute_entropy(student_logits, **kwargs):
         A dict containing the mean entropy value.
     """
     with torch.no_grad():
-        probs = F.softmax(student_logits, dim=-1)
-        entropy = torch.logsumexp(student_logits, dim=-1) - torch.sum(probs * student_logits, dim=-1)
+        chunk_tokens = 2048
+        entropy_parts = []
+        for chunk in student_logits.split(chunk_tokens, dim=0):
+            chunk = chunk.float()
+            # H = logsumexp(z) - sum(softmax(z) * z)
+            #   = max + log(sum(exp(z - max))) - sum(softmax * z)  (numerically stable)
+            logits_max = chunk.max(dim=-1, keepdim=True).values
+            exp_logits = (chunk - logits_max).exp_()
+            sum_exp = exp_logits.sum(dim=-1, keepdim=True)
+            softmax = exp_logits.div_(sum_exp)
+            sum_softmax_logits = (softmax * chunk).sum(dim=-1)
+            entropy_parts.append(
+                logits_max.squeeze(-1) + sum_exp.log().squeeze(-1) - sum_softmax_logits
+            )
+        entropy = (
+            torch.cat(entropy_parts) if len(entropy_parts) > 1 else entropy_parts[0]
+        )
     return {"distill/student_entropy": entropy.mean()}
