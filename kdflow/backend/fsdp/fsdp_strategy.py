@@ -596,7 +596,18 @@ class FSDP2Strategy(ABC):
         bucket = []
         bucket_size = 0
 
-        for name, param in model_unwrapped.state_dict().items():
+        state_dict = model_unwrapped.state_dict()
+        model_config = getattr(model_unwrapped, "config", None)
+        tie_word_embeddings = getattr(model_config, "tie_word_embeddings", False)
+        skip_tied_lm_head = (
+            tie_word_embeddings and "model.embed_tokens.weight" in state_dict
+        )
+
+        for name, param in state_dict.items():
+            # Skip the duplicate lm_head alias when embeddings are tied.
+            if skip_tied_lm_head and name == "lm_head.weight":
+                continue
+
             param_size = param.numel() * param.element_size()
             if bucket and bucket_size + param_size >= update_weight_buffer_size:
                 self._flush_weight_bucket(
@@ -618,6 +629,8 @@ class FSDP2Strategy(ABC):
                 ).to_local()
             bucket.append((name, param))
             bucket_size += param_size
+
+        del state_dict
 
         if bucket:
             self._flush_weight_bucket(
