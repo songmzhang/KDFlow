@@ -44,6 +44,9 @@ pip install -e ".[all]"
     To use **Qwen3.5** and similar models, install a recent SGLang version that
     supports `transformers ≥ 5.3.0`.
 
+    Enabling `--packing_samples True` for linear-attention models such as
+    Qwen3.5 requires `transformers ≥ 5.9.0`.
+
 !!! warning "VLM users"
     `sglang==0.5.9` has a known VLM compatibility bug tracked in
     [sglang#19335](https://github.com/sgl-project/sglang/issues/19335) and

@@ -155,6 +155,16 @@ Defined in `kdflow/arguments/data_args.py`.
 | `--packing_samples`           | `False`      | Pack sequences for efficiency                                              |
 | `--preprocess_num_workers`    | `8`          | Workers for data preprocessing                                             |
 
+!!! note "Packing with linear-attention models"
+    Linear-attention models such as **Qwen3.5** and **Qwen3-Next** require
+    `transformers>=5.9.0` when `--packing_samples True` is enabled. Earlier
+    Transformers versions do not propagate the packed-sequence boundary
+    metadata required by their linear-attention and causal-convolution layers.
+
+    KDFlow automatically disables packing with a warning when this requirement
+    is not met. Linear-attention packing currently supports text-only training
+    with `--ring_attn_size 1`.
+
 ---
 
 ## Logging Arguments
@@ -165,6 +175,7 @@ Defined in `kdflow/arguments/logging_args.py`.
 |----------------------|-----------|--------------------------------------------------------|
 | `--logging_steps`    | `10`      | Log every N steps                                      |
 | `--use_wandb`        | `False`   | Enable W&B logging                                     |
+| `--sync_swanlab`     | `False`   | Sync W&B metrics to SwanLab; requires `--use_wandb True` and the `swanlab` package |
 | `--wandb_org`        | `None`    | W&B organization                                       |
 | `--wandb_project`    | `None`    | W&B project                                            |
 | `--wandb_group`      | `None`    | W&B group                                              |

@@ -109,6 +109,7 @@ docker pull songmzhang/kdflow:sgl0512-torch211-cu129
 ```
 
 > To support Qwen3.5, please use the latest version of SGLang which supports transformers v5.3.0.
+> Enabling `--packing_samples True` for linear-attention models such as Qwen3.5 requires `transformers>=5.9.0`.
 
 > Older `sgl059-torch291-cu128` images are kept as legacy.
 >
