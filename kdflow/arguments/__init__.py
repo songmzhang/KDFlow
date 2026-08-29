@@ -1,6 +1,8 @@
 import json
 from dataclasses import dataclass, field
 
+import transformers
+from packaging.version import Version
 from transformers import HfArgumentParser
 
 from kdflow.arguments.data_args import DataArguments
@@ -35,6 +37,7 @@ def is_linear_attention(model_path: str) -> bool:
     except Exception:
         return False
     return any(k in model_type.lower() for k in ("qwen3_next", "qwen3_5"))
+
 
 def init_args(scenario: str = "sft"):
     parser = HfArgumentParser((
@@ -91,11 +94,24 @@ def init_args(scenario: str = "sft"):
             args.model.attn_implementation = "flash_attention_2"
 
         if is_linear_attention(args.model.student_name_or_path):
-            logger.warning(
-                f"--packing_samples is not yet compatible with linear-attention models "
-                f"(got {args.model.student_name_or_path}). Auto-disabling --packing_samples."
-            )
-            args.data.packing_samples = False
+            if Version(transformers.__version__) < Version("5.9.0"):
+                logger.warning(
+                    "--packing_samples for linear-attention models requires transformers>=5.9.0 "
+                    f"(got {transformers.__version__}). Auto-disabling --packing_samples."
+                )
+                args.data.packing_samples = False
+            elif args.model.ring_attn_size > 1:
+                logger.warning(
+                    "--packing_samples for linear-attention models is only supported with "
+                    "--ring_attn_size 1. Auto-disabling --packing_samples."
+                )
+                args.data.packing_samples = False
+            elif args.data.image_key is not None:
+                logger.warning(
+                    "--packing_samples for linear-attention models currently only supports text-only data. "
+                    "Auto-disabling --packing_samples."
+                )
+                args.data.packing_samples = False
 
     total_gpus = args.train.num_nodes * args.train.num_gpus_per_node
 

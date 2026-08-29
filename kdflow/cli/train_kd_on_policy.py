@@ -193,7 +193,7 @@ def train(args):
         student_model=student_model,
         teacher_model=teacher_model,
         rollout_group=rollout_group,
-        is_same_tokenizer=tokenizer_info.is_identical,
+        is_same_tokenizer=tokenizer_info.vocab_identical,
         train_dataloader=train_dataloader,
         eval_dataloader=eval_dataloader,
         max_rollout_iters=max_rollout_iters,

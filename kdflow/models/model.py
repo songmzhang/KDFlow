@@ -41,6 +41,8 @@ class DistillModel(nn.Module):
         attn_impl = self.args.model.attn_implementation
 
         self.model_config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+        model_type = self.model_config.model_type or ""
+        self.is_linear_attention = any(k in model_type.lower() for k in ("qwen3_next", "qwen3_5"))
         
         # Determine if this is a Vision-Language model
         self.is_vl_model = hasattr(self.model_config, "vision_config")
@@ -113,10 +115,17 @@ class DistillModel(nn.Module):
         batch, seqlen = sequences.size()
         foward_attention_mask = attention_mask
         if self.packing_samples:
-            sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices = unpad_and_slice_tensor(
-                sequences, attention_mask, ring_attn_group
-            )
+            (
+                sequences,
+                position_ids,
+                rolled_sequences,
+                ring_attn_pad_len,
+                indices,
+                packing_kwargs,
+            ) = unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group)
             foward_attention_mask = None
+            if self.is_linear_attention:
+                kwargs = {**kwargs, **packing_kwargs}
         else:
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)

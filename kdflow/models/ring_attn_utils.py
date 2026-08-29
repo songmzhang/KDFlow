@@ -128,8 +128,10 @@ def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
     index_first_axis, pad_input, rearrange, unpad_input, _ = _require_flash_attn()
 
     rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
-    sequences, indices, cu_seqlens, _, _ = unpad_input(sequences.unsqueeze(-1), attention_mask)
+    sequences, indices, cu_seqlens, max_seqlen, _ = unpad_input(sequences.unsqueeze(-1), attention_mask)
     sequences = sequences.transpose(0, 1)  # (1, total_seqs)
+    seq_idx = torch.arange(attention_mask.shape[0], dtype=torch.int32, device=attention_mask.device)
+    seq_idx = seq_idx[:, None].expand_as(attention_mask)[attention_mask.bool()].unsqueeze(0)
     rolled_sequences = index_first_axis(
         rearrange(rolled_sequences.unsqueeze(-1), "b s ... -> (b s) ..."), indices
     ).transpose(
@@ -146,7 +148,14 @@ def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
         )
         cu_seqlens[-1] += ring_attn_pad_len
         update_ring_attn_params(cu_seqlens)
-    return sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices
+    packing_kwargs = {
+        "seq_idx": seq_idx,
+        "cu_seq_lens_q": cu_seqlens,
+        "cu_seq_lens_k": cu_seqlens,
+        "max_length_q": max_seqlen,
+        "max_length_k": max_seqlen,
+    }
+    return sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices, packing_kwargs
 
 
 def gather_and_pad_tensor(tensor, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen):
