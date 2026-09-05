@@ -291,7 +291,10 @@ class FSDP2Strategy(ABC):
         set_model_state_dict(model, full_state, options=options)
 
         # set_model_state_dict will not broadcast buffers, so we need to broadcast them manually.
-        for _name, buf in model.named_buffers():
+        for _name, buf in sorted(
+            model.named_buffers(),
+            key=lambda item: item[0],
+        ):
             dist.broadcast(buf, src=0)
 
         if is_cpu_offload:
