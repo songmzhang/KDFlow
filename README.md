@@ -22,7 +22,7 @@
 Welcome to join our WeChat group for discussion and communication!
 
 <p align="center">
-  <img src="figures/wechat.png" alt="WeChat Group QR Code" width="300">
+  <img src="figures/wechat.jpg" alt="WeChat Group QR Code" width="300">
 </p>
 
 ---
