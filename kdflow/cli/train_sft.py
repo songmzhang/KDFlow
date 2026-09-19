@@ -1,4 +1,3 @@
-import os
 import math
 from transformers.trainer import get_scheduler
 
@@ -94,10 +93,6 @@ def train(args):
     if args.train.gradient_checkpointing:
         student.gradient_checkpointing_enable()
     
-    # load checkpoint
-    global_step, start_epoch = 0, 0
-    os.makedirs(args.train.save_path, exist_ok=True)
-
     # configure Trainer
     trainer = SFTTrainer(
         args,
@@ -110,11 +105,9 @@ def train(args):
         num_update_steps_per_epoch=num_update_steps_per_epoch,
     )
 
-    trainer.fit(global_step, start_epoch)
-
-    # save model checkpoint after fitting on only rank0
-    strategy.save_model(student, args.train.save_path)
-    strategy.log("Training completed and model saved.")
+    trainer.fit()
+    strategy.save_model(student, args.ckpt.save_path)
+    strategy.log("Training completed.")
 
 
 if __name__ == "__main__":

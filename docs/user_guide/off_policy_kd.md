@@ -91,7 +91,7 @@ For routing samples to multiple domain-specific teachers, see
 ## What runs under the hood
 
 1. The CLI calls `init_args("off_policy_kd")`, which parses
-   `ModelArguments`, `TrainingArguments`, `FSDPArguments`,
+   `ModelArguments`, `TrainingArguments`, `CheckpointArguments`, `FSDPArguments`,
    `DistillationArguments`, `DataArguments`, `LoggingArguments` and
    `RolloutArguments` (rollout is auto-disabled by setting
    `--rollout_num_engines 0`).
@@ -118,6 +118,7 @@ For routing samples to multiple domain-specific teachers, see
 
 ## See also
 
+- [Checkpoints](../reference/arguments.md#checkpoint-arguments) — save models and resume training.
 - [Evaluation](evaluation.md) — evaluate KD and distillation metrics during training.
 - [On-Policy KD](on_policy_kd.md) — same recipe but with student rollouts.
 - [Multi-Teacher KD](multi_teacher_kd.md) — route samples to domain-specific teachers.

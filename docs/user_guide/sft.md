@@ -49,6 +49,7 @@ distillation/rollout-specific knobs:
 
 - [Model](../reference/arguments.md#model-arguments)
 - [Training](../reference/arguments.md#training-arguments)
+- [Checkpoint](../reference/arguments.md#checkpoint-arguments)
 - [FSDP](../reference/arguments.md#fsdp-arguments)
 - [Data](../reference/arguments.md#data-arguments)
 - [Logging](../reference/arguments.md#logging-arguments)

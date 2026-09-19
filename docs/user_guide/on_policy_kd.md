@@ -112,6 +112,8 @@ Tips:
 - A smaller decay (e.g. `0.99`) lets the teacher follow the student more
   aggressively; close to `0.0` makes EMA degenerate to a hard sync.
 - EMA only adds a CPU-side parameter copy; GPU memory is unaffected.
+  With `--save_training_state True`, an additional CPU snapshot stores the
+  last weights synced to the teacher for resuming training.
 
 ## VLM on-policy KD
 
@@ -140,6 +142,7 @@ For routing rollouts to multiple domain-specific teachers, see
 
 ## See also
 
+- [Checkpoints](../reference/arguments.md#checkpoint-arguments) — save models and resume training.
 - [Evaluation](evaluation.md) — configure validation rollouts and custom metrics.
 - [Off-Policy KD](off_policy_kd.md)
 - [Multi-Teacher KD](multi_teacher_kd.md)

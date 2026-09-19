@@ -1,5 +1,4 @@
 import math
-import os
 import time
 import torch
 import numpy as np
@@ -16,6 +15,7 @@ from kdflow.utils.logging_utils import (
     log_eval_metrics,
 )
 from kdflow.utils.dynamic_bsz import rearrange_global_batch
+from kdflow.backend.fsdp.checkpoint import resolve_resume_checkpoint
 
 
 logger = init_logger(__name__)
@@ -103,13 +103,27 @@ class SFTTrainer:
             log_config("Gradient Accumulation:", grad_accum)
         log_config("Learning Rate:", self.args.train.learning_rate)
     
-    def fit(self, global_step=0, start_epoch=0):
-        self.global_step = global_step
+    def fit(self):
+        self.global_step, start_epoch = 0, 0
+        checkpoint_path = resolve_resume_checkpoint(
+            self.args.ckpt.save_path, self.args.ckpt.resume_from, self.args.ckpt.resume_training,
+        )
+        if checkpoint_path is not None:
+            self.strategy.log(f"Resuming training from {checkpoint_path}")
+            state = self.strategy.load_checkpoint(
+                self.student, checkpoint_path, optimizer=self.optimizer, scheduler=self.scheduler,
+            )
+            self.global_step = state["global_step"]
+            start_epoch = state["epoch"] if state["epoch_end"] else state["epoch"] - 1
+            if not state["epoch_end"]:
+                self.train_dataloader.sampler.set_epoch(start_epoch)
+                self.train_dataloader.load_state_dict(state["trainer_state"]["data_loader_state_dict"])
         
         # Print training configuration
         self._print_training_config()
         
         self.start_time = time.time()
+        num_micro_batches = self.strategy.accumulated_gradient
         if self.eval_dataloader is not None and self.args.train.eval_steps < float("inf") and self.global_step == 0:
             self.strategy.log(f"Start evaluating at global step {self.global_step}")
             self.evaluate()
@@ -126,7 +140,7 @@ class SFTTrainer:
                 step_start = time.time()
                 global_batch, global_batch_token_num = [], 0
                 try:
-                    for _ in range(self.strategy.accumulated_gradient):
+                    for _ in range(num_micro_batches):
                         micro_batch = next(data_iter)
                         global_batch.append(micro_batch)
                         global_batch_token_num += micro_batch["stu_loss_mask"].sum()
@@ -140,7 +154,7 @@ class SFTTrainer:
                         dp_group=self.dp_group,
                     )
                     self.strategy.accumulated_gradient = len(global_batch)
-                    self.strategy.step = 0
+                    self.strategy.grad_accum_step = 0
                 
                 global_batch_token_num = global_batch_token_num.to(torch.cuda.current_device())
                 dist.all_reduce(global_batch_token_num, op=dist.ReduceOp.SUM)
@@ -171,20 +185,29 @@ class SFTTrainer:
                     self.strategy.log(f"Start evaluating at global step {self.global_step}")
                     self.evaluate()
                 
-                if self.global_step % self.args.train.save_steps == 0:
-                    self.strategy.log(f"Saving model at global step {self.global_step}")
-                    save_path = os.path.join(self.args.train.save_path, f"epoch_{epoch + 1}_global_step_{self.global_step}")
-                    self.strategy.save_model(self.student, save_path)
+                if (
+                    self.global_step % self.args.ckpt.save_steps == 0
+                    and self.global_step < (epoch + 1) * self.num_update_steps_per_epoch
+                ):
+                    self.save_checkpoint()
 
-            self.strategy.log(f"Saving model after epoch {epoch + 1}")
-            save_path = os.path.join(self.args.train.save_path, f"epoch_{epoch + 1}")
-            self.strategy.save_model(self.student, save_path)
+            self.save_checkpoint(epoch_end=True)
 
         total_time = time.time() - self.start_time
         self.strategy.log(f"Training done, totally cost {str(timedelta(seconds=total_time)).split('.')[0]}")
 
         if self._wandb is not None and dist.get_rank() == 0:
             self._wandb.finish()
+
+    def save_checkpoint(self, epoch_end=False):
+        self.strategy.log(f"Saving checkpoint at global step {self.global_step}")
+        trainer_state = None
+        if self.args.ckpt.save_training_state:
+            trainer_state = {"data_loader_state_dict": self.train_dataloader.state_dict()}
+        return self.strategy.save_checkpoint(
+            self.student, self.current_epoch + 1, self.global_step, epoch_end=epoch_end,
+            optimizer=self.optimizer, scheduler=self.scheduler, trainer_state=trainer_state,
+        )
 
     @torch.no_grad()
     def evaluate(self):

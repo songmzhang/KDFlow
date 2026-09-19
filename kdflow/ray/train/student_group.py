@@ -124,13 +124,15 @@ class StudentActorGroup:
         """
         return [actor.init_model_from_pretrained.remote(*args, **kwargs) for actor in self._actor_handlers]
 
-    def async_save_model(self, save_path=None):
-        """Save actor model on rank 0.
-
-        Returns:
-            List: list of remote object refs.
-        """
+    def async_save_model(self, save_path):
         return [actor.save_model.remote(save_path) for actor in self._actor_handlers]
+
+    def async_save_checkpoint(self, epoch, global_step, **kwargs):
+        return [actor.save_checkpoint.remote(epoch, global_step, **kwargs) for actor in self._actor_handlers]
+
+    def load_checkpoint(self, checkpoint_path):
+        states = ray.get([actor.load_checkpoint.remote(checkpoint_path) for actor in self._actor_handlers])
+        return states[0]
     
     def async_run_distill(self, data):
         """ Send data to each distill worker and run distillation.
@@ -232,14 +234,14 @@ class StudentActorGroup:
         ]
         ray.get(refs)
         
-    def update_teacher_weights(self):
+    def update_teacher_weights(self, restore=False):
         """Stream FSDP weights to teacher_actors via Gloo gather + CUDA IPC.
 
         All ranks participate: each rank serializes its local CUDA IPC data,
         gathers to the source rank via Gloo, and the source rank sends to sglang.
         """
         refs = [
-            actor.update_teacher_weights.remote()
+            actor.update_teacher_weights.remote(restore=restore)
             for actor in self._actor_handlers
         ]
         ray.get(refs)

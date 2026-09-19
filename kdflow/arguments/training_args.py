@@ -54,10 +54,6 @@ class TrainingArguments:
         default=-1,
         metadata={"help": "Evaluation every n step."}
     )
-    save_steps: int = field(
-        default=-1,
-        metadata={"help": "Save checkpoints every n step."}
-    )
     backend: str = field(
         default="fsdp2",
         metadata={
@@ -82,15 +78,6 @@ class TrainingArguments:
     full_determinism: bool = field(
         default=False,
         metadata={"help": "Enable reproducible behavior during distributed training."}
-    )
-    load_checkpoint: bool = field(
-        default=False
-    )
-    ckpt_path: str = field(
-        default="./ckpt/checkpoints_distill"
-    )
-    save_path: str = field(
-        default="./ckpt/"
     )
     seed: int = field(
         default=42,
@@ -139,8 +126,5 @@ class TrainingArguments:
         else:
              raise TypeError(f"Expected str for adam_betas, but get {type(self.adam_betas)}")
          
-        if self.save_steps <= 0:
-            self.save_steps = float("inf")
-        
         if self.eval_steps <= 0:
             self.eval_steps = float("inf")

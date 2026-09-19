@@ -20,11 +20,11 @@ from torch.distributed.fsdp import (
 from torch.distributed.tensor import DTensor
 from torch.distributed.checkpoint.state_dict import (
     get_model_state_dict,
-    set_model_state_dict,
     StateDictOptions,
 )
 from torchdata.stateful_dataloader import StatefulDataLoader
 
+from kdflow.backend.fsdp import checkpoint
 from kdflow.utils.logging_utils import init_logger
 from kdflow.models import DistillModel
 from kdflow.utils.distributed_sampler import DistributedSampler
@@ -45,6 +45,7 @@ class FSDP2Strategy(ABC):
         args=None,
     ) -> None:
         self.args = args
+        self.checkpoint_names: list[str] = []
         self.seed = seed
         self.max_norm = max_norm
         self.micro_train_batch_size = micro_train_batch_size
@@ -105,7 +106,7 @@ class FSDP2Strategy(ABC):
                 "cuda", (self.world_size,), mesh_dim_names=("sharded",)
             )
         
-        self.step = 0
+        self.grad_accum_step = 0
         self.accumulated_gradient = (
             self.train_batch_size
             * self.sp_size
@@ -348,7 +349,7 @@ class FSDP2Strategy(ABC):
             return model
         
     def backward(self, loss: torch.Tensor, model: nn.Module, optimizer: Optimizer, **kwargs) -> None:
-        self.step = (self.step + 1) % self.accumulated_gradient
+        self.grad_accum_step = (self.grad_accum_step + 1) % self.accumulated_gradient
         loss = loss / self.accumulated_gradient
         loss.backward()
     
@@ -359,7 +360,7 @@ class FSDP2Strategy(ABC):
         scheduler,
         **kwargs,
     ) -> None:
-        if self.step == 0:
+        if self.grad_accum_step == 0:
             if self.max_norm > 0.0:
                 if hasattr(model, "clip_grad_norm_"):
                     model.clip_grad_norm_(self.max_norm)
@@ -371,68 +372,17 @@ class FSDP2Strategy(ABC):
             if scheduler:
                 scheduler.step()
             
-    def load_model(self, model: nn.Module, path: str, map_location="cpu", strict: bool = False, key_replace_fn=None) -> None:
-        # For FSDP2, we prefer Distributed Checkpoint (DCP)
-        # But if the user provides a standard `torch.save` file path, we try to load it.
-        # We use `set_model_state_dict` from DCP which handles sharding.
-        
-        # Load state dict on rank 0 (or all if mapped)
-        state_dict = torch.load(path, map_location=map_location)
-        if key_replace_fn:
-            state_dict = key_replace_fn(state_dict)
-
-        model_to_load = self._unwrap_model(model)
-        
-        # DCP Helper to load full state dict into sharded model
-        # Note: This is memory intensive on Rank 0 if strict full load.
-        options = StateDictOptions(full_state_dict=True, cpu_offload=True)
-        set_model_state_dict(model_to_load, model_state_dict=state_dict, options=options)
+    def load_model(self, model: nn.Module, model_dir, strict: bool = False) -> None:
+        return checkpoint.load_model(self, model, model_dir, strict=strict)
     
     def save_model(self, model: nn.Module, output_dir, **kwargs) -> None:
-        if hasattr(model, "module"):
-            model = model.module
-            
-        processor = getattr(model, "processor", None)
-        processor_or_tokenizer = (
-            processor
-            if processor is not None
-            else getattr(model, "tokenizer", None)
-        )
+        return checkpoint.save_model(self, model, output_dir, **kwargs)
 
-        model_to_save = self._unwrap_model(model)
-        
-        if self.is_rank_0():
-            os.makedirs(output_dir, exist_ok=True)
-        
-        options = StateDictOptions(full_state_dict=True, cpu_offload=True)
-        
-        state_dict = get_model_state_dict(model_to_save, options=options)
-        
-        if self.args.train.bf16:
-            state_dict = {
-                k: v.to(torch.bfloat16) if torch.is_floating_point(v) else v
-                for k, v in state_dict.items()
-            }
-        
-        if self.is_rank_0():
-            if isinstance(model_to_save, PeftModel):
-                model_to_save.save_pretrained(
-                    output_dir, 
-                    state_dict=state_dict,
-                    safe_serialization=False,
-                    **kwargs
-                )
-            else:
-                model_to_save.save_pretrained(output_dir, state_dict=state_dict, **kwargs)
-            
-            # Config and processor/tokenizer
-            output_config_file = os.path.join(output_dir, "config.json")
-            model_to_save.config.to_json_file(output_config_file)
-            processor_or_tokenizer.save_pretrained(output_dir)
+    def save_checkpoint(self, model: nn.Module, epoch: int, global_step: int, **kwargs):
+        return checkpoint.save_checkpoint(self, model, epoch, global_step, **kwargs)
 
-        del state_dict
-        gc.collect()
-        torch_dist_barrier_and_cuda_sync()
+    def load_checkpoint(self, model: nn.Module, checkpoint_path, **kwargs):
+        return checkpoint.load_checkpoint(self, model, checkpoint_path, **kwargs)
     
     def all_reduce(self, data, op="mean"):
         assert op in ("mean", "max", "sum")
@@ -493,7 +443,7 @@ class FSDP2Strategy(ABC):
             torch.cuda.empty_cache()
             
     @torch.no_grad()
-    def reload_model_params(self, model):
+    def onload_model_params(self, model):
         device = torch.cuda.current_device()
         model.to(device)
         
@@ -512,8 +462,8 @@ class FSDP2Strategy(ABC):
             torch.cuda.empty_cache()
 
     @torch.no_grad()
-    def reload_optim_states(self, optimizer: Optimizer):
-        """reload optimizer states to GPU"""
+    def onload_optim_states(self, optimizer: Optimizer):
+        """Move optimizer states to GPU."""
         device = torch.cuda.current_device()
         if not optimizer.state:
             return

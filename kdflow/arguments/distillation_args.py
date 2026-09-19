@@ -114,6 +114,8 @@ class DistillationArguments:
     )
 
     def __post_init__(self):
+        if self.teacher_forward_n_batches <= 0:
+            raise ValueError("--teacher_forward_n_batches must be a positive integer.")
         # Validate teacher parallel size settings
         if self.teacher_ep_size > self.teacher_tp_size:
             raise ValueError(
@@ -130,5 +132,4 @@ class DistillationArguments:
             raise ValueError(f"kd_temperature must be > 0, got {self.kd_temperature}.")
         if not 0.0 < self.teacher_mem_fraction_static <= 1.0:
             raise ValueError(f"teacher_mem_fraction_static must be in (0, 1], got {self.teacher_mem_fraction_static}.")
-
 

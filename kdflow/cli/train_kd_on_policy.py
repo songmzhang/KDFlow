@@ -204,8 +204,8 @@ def train(args):
     
     try:
         trainer.fit()
-        ray.get(student_model.async_save_model())
-        strategy.log("Training completed and model saved.")
+        ray.get(student_model.async_save_model(args.ckpt.save_path))
+        strategy.log("Training completed.")
     finally:
         teacher_model.shutdown()
         rollout_group.shutdown()

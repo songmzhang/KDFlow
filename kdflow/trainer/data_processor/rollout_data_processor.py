@@ -80,7 +80,7 @@ class RolloutDataProcessor:
         global_step: int,
         mode: str,
     ) -> None:
-        rollout_dir = os.path.join(self.args.train.save_path, "rollout_data")
+        rollout_dir = os.path.join(self.args.ckpt.save_path, "rollout_data")
         if mode == "eval":
             rollout_dir = os.path.join(rollout_dir, "val")
         os.makedirs(rollout_dir, exist_ok=True)

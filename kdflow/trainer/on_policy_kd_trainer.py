@@ -1,4 +1,3 @@
-import os
 import time
 from datetime import timedelta
 from typing import Callable, Dict, Optional
@@ -14,6 +13,7 @@ from kdflow.utils.logging_utils import (
     normalize_eval_metrics,
 )
 from kdflow.utils.dynamic_bsz import rearrange_global_batch
+from kdflow.backend.fsdp.checkpoint import resolve_resume_checkpoint
 
 
 logger = init_logger(__name__)
@@ -171,8 +171,19 @@ class OnPolicyKDTrainer:
             all_global_batches.append(global_batch)
         return all_global_batches
     
-    def fit(self, global_step=0, start_epoch=0):
-        self.global_step = global_step
+    def fit(self):
+        self.global_step, start_epoch = 0, 0
+        checkpoint_path = resolve_resume_checkpoint(
+            self.args.ckpt.save_path, self.args.ckpt.resume_from, self.args.ckpt.resume_training,
+        )
+        if checkpoint_path is not None:
+            self.strategy.log(f"Resuming training from {checkpoint_path}")
+            state = self.student.load_checkpoint(checkpoint_path)
+            self.global_step = state["global_step"]
+            start_epoch = state["epoch"] if state["epoch_end"] else state["epoch"] - 1
+            if not state["epoch_end"]:
+                self.train_dataloader.sampler.set_epoch(start_epoch)
+                self.train_dataloader.load_state_dict(state["trainer_state"]["data_loader_state_dict"])
         
         # Print training configuration and initialize loggers
         self._print_training_config()
@@ -186,6 +197,12 @@ class OnPolicyKDTrainer:
         if self.args.model.student_name_or_path == self.args.model.teacher_name_or_path:   # for self-distillation
             num_gpus_per_teacher_actor = self.args.kd.teacher_tp_size * self.args.kd.teacher_pp_size
             self.student.connect_teacher_actors(self.teacher.teacher_engines, num_gpus_per_teacher_actor)
+            if self.global_step >= self.args.kd.teacher_update_freq:
+                if self.args.train.enable_sleep:
+                    self.teacher.wakeup(tags=["weights"])
+                self.student.update_teacher_weights(restore=True)
+                if self.args.train.enable_sleep:
+                    self.teacher.sleep(tags=["weights"])
         
         self.start_time = time.time()
         num_micro_batches = self.args.train.train_batch_size // self.args.train.micro_train_batch_size
@@ -279,15 +296,13 @@ class OnPolicyKDTrainer:
                     self.strategy.log(f"Evaluating model at global step {self.global_step}")
                     self.evaluate()
                 
-                if self.global_step % self.args.train.save_steps == 0:
-                    self.strategy.log(f"Saving model at global step {self.global_step}")
-                    save_path = os.path.join(self.args.train.save_path, f"epoch_{epoch + 1}_global_step_{self.global_step}")
-                    ray.get(self.student.async_save_model(save_path))
+                if (
+                    self.global_step % self.args.ckpt.save_steps == 0
+                    and self.global_step < (epoch + 1) * self.num_rollout_iters_per_epoch
+                ):
+                    self.save_checkpoint()
         
-            # save model after each epoch
-            self.strategy.log(f"Saving model after epoch {epoch + 1}")
-            save_path = os.path.join(self.args.train.save_path, f"epoch_{epoch + 1}")
-            ray.get(self.student.async_save_model(save_path))
+            self.save_checkpoint(epoch_end=True)
 
         total_time = time.time() - self.start_time
         self.strategy.log(f"Training done, totally cost {str(timedelta(seconds=total_time)).split('.')[0]}")
@@ -295,6 +310,15 @@ class OnPolicyKDTrainer:
         if self._wandb is not None:
             self._wandb.finish()
             
+    def save_checkpoint(self, epoch_end=False):
+        self.strategy.log(f"Saving checkpoint at global step {self.global_step}")
+        trainer_state = None
+        if self.args.ckpt.save_training_state:
+            trainer_state = {"data_loader_state_dict": self.train_dataloader.state_dict()}
+        return ray.get(self.student.async_save_checkpoint(
+            self.current_epoch + 1, self.global_step, epoch_end=epoch_end, trainer_state=trainer_state,
+        ))
+
     def evaluate(self):
         """Evaluate on validation set."""
         eval_prompts = sum(self.eval_dataloader, [])

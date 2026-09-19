@@ -1,4 +1,3 @@
-import os
 import time
 import json
 from datetime import timedelta
@@ -12,6 +11,7 @@ from tqdm import tqdm
 
 from kdflow.utils.logging_utils import define_wandb_metrics, init_logger, log_eval_metrics
 from kdflow.utils.dynamic_bsz import rearrange_global_batch
+from kdflow.backend.fsdp.checkpoint import resolve_resume_checkpoint
 
 
 logger = init_logger(__name__)
@@ -124,8 +124,19 @@ class OffPolicyKDTrainer:
         log_config("KD Algorithm:", self.args.kd.kd_algorithm)
         log_config("KD Loss Function:", self.args.kd.kd_loss_fn)
     
-    def fit(self, global_step=0, start_epoch=0):
-        self.global_step = global_step
+    def fit(self):
+        self.global_step, start_epoch = 0, 0
+        checkpoint_path = resolve_resume_checkpoint(
+            self.args.ckpt.save_path, self.args.ckpt.resume_from, self.args.ckpt.resume_training,
+        )
+        if checkpoint_path is not None:
+            self.strategy.log(f"Resuming training from {checkpoint_path}")
+            state = self.student.load_checkpoint(checkpoint_path)
+            self.global_step = state["global_step"]
+            start_epoch = state["epoch"] if state["epoch_end"] else state["epoch"] - 1
+            if not state["epoch_end"]:
+                self.train_dataloader.sampler.set_epoch(start_epoch)
+                self.train_dataloader.load_state_dict(state["trainer_state"]["data_loader_state_dict"])
         
         # Print training configuration and initialize loggers
         self._print_training_config()
@@ -149,7 +160,11 @@ class OffPolicyKDTrainer:
                 step_group_start = time.time()
                 # Collect N global batches for teacher forward
                 all_global_batches = []
-                for _ in range(teacher_forward_n):
+                steps_to_save = self.args.ckpt.save_steps - self.global_step % self.args.ckpt.save_steps
+                steps_to_eval = float("inf")
+                if self.eval_dataloader is not None:
+                    steps_to_eval = self.args.train.eval_steps - self.global_step % self.args.train.eval_steps
+                for _ in range(min(teacher_forward_n, steps_to_save, steps_to_eval)):
                     global_batch = []
                     try:
                         for _ in range(num_micro_batches):
@@ -207,12 +222,7 @@ class OffPolicyKDTrainer:
                     self.log_state["timing/student_train"].append(student_step_train_time)
                     self.log_state["timing/step_time"].append(shared_step_time + student_step_train_time)
                     self.logging()
-                    
-                    if self.global_step % self.args.train.save_steps == 0:
-                        self.strategy.log(f"Saving model at global step {self.global_step}")
-                        save_path = os.path.join(self.args.train.save_path, f"epoch_{epoch + 1}_global_step_{self.global_step}")
-                        ray.get(self.student.async_save_model(save_path))
-                
+
                 if self.args.train.enable_sleep:
                     self.student.sleep()
 
@@ -222,16 +232,29 @@ class OffPolicyKDTrainer:
                 ):
                     self.strategy.log(f"Start evaluating at global step {self.global_step}")
                     self.evaluate()
+
+                if (
+                    self.global_step % self.args.ckpt.save_steps == 0
+                    and self.global_step < (epoch + 1) * self.num_update_steps_per_epoch
+                ):
+                    self.save_checkpoint()
                 
-            self.strategy.log(f"Saving model after epoch {epoch + 1}")
-            save_path = os.path.join(self.args.train.save_path, f"epoch_{epoch + 1}")
-            ray.get(self.student.async_save_model(save_path))
+            self.save_checkpoint(epoch_end=True)
 
         total_time = time.time() - self.start_time
         self.strategy.log(f"Training done, totally cost {str(timedelta(seconds=total_time)).split('.')[0]}")
 
         if self._wandb is not None:
             self._wandb.finish()
+
+    def save_checkpoint(self, epoch_end=False):
+        self.strategy.log(f"Saving checkpoint at global step {self.global_step}")
+        trainer_state = None
+        if self.args.ckpt.save_training_state:
+            trainer_state = {"data_loader_state_dict": self.train_dataloader.state_dict()}
+        return ray.get(self.student.async_save_checkpoint(
+            self.current_epoch + 1, self.global_step, epoch_end=epoch_end, trainer_state=trainer_state,
+        ))
 
     def evaluate(self):
         """Evaluate KD loss and distillation metrics without updating the student."""

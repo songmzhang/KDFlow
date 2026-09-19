@@ -1,14 +1,14 @@
 # Arguments
 
-All KDFlow CLI flags are parsed by a single `HfArgumentParser` over seven
-dataclasses (defined under `kdflow/arguments/`). The relevant subset is
-selected per scenario by `init_args(scenario)`:
+All KDFlow CLI flags are parsed by a single `HfArgumentParser` over eight
+dataclasses (defined under `kdflow/arguments/`). Each scenario uses the
+following argument groups:
 
 | Scenario      | Dataclasses included                                                                                |
 |---------------|------------------------------------------------------------------------------------------------------|
-| `sft`         | Model + Training + FSDP + Data + Logging                                                            |
-| `off_policy_kd` | Model + Training + FSDP + Distillation + Data + Logging |
-| `on_policy_kd`  | Model + Training + FSDP + Distillation + Data + Logging + Rollout                                  |
+| `sft`         | Model + Training + Checkpoint + FSDP + Data + Logging |
+| `off_policy_kd` | Model + Training + Checkpoint + FSDP + Distillation + Data + Logging |
+| `on_policy_kd`  | Model + Training + Checkpoint + FSDP + Distillation + Data + Logging + Rollout |
 
 The tables below mirror the canonical reference in the project README.
 
@@ -56,14 +56,90 @@ Defined in `kdflow/arguments/training_args.py`.
 | `--gradient_checkpointing`     | `False`                  | Enable gradient checkpointing                                     |
 | `--enable_sleep`               | `False`                  | Enable sleep mode for student / teacher / rollout                 |
 | `--eval_steps`                 | `-1`                     | Evaluation interval in global steps; set a positive value to enable periodic evaluation |
-| `--save_steps`                 | `-1`                     | Save checkpoint every N steps (-1 disables)                       |
-| `--save_path`                  | `./ckpt/`                | Final model save path                                             |
-| `--ckpt_path`                  | `./ckpt/checkpoints_distill` | Intermediate checkpoint path                                  |
 | `--seed`                       | `42`                     | Random seed                                                       |
 | `--bf16`                       | `False`                  | Enable bfloat16 training                                          |
 | `--use_dynamic_bsz`            | `False`                  | Enable dynamic batch size based on token count per GPU            |
 | `--max_token_len_per_gpu`      | `0`                      | Max total tokens per micro-batch when `use_dynamic_bsz=True`      |
 | `--chunked_loss_size`          | `None`                   | Token chunk size for chunked loss computation. If not `None`, logits and the corresponding loss will be computed chunk by chunk to reduce GPU memory. See [Chunked Loss](../concepts/losses.md#chunked-loss-memory-efficient-computation). |
+
+---
+
+## Checkpoint Arguments
+
+Defined in `kdflow/arguments/ckpt_args.py`. Used by SFT, off-policy KD, and on-policy KD.
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--save_path` | `./ckpt/` | Root directory for checkpoints |
+| `--save_steps` | `-1` | Save every N steps; -1 disables periodic saving |
+| `--save_training_state` | `False` | Include training state for resuming |
+| `--resume_from` | `None` | Checkpoint directory to resume from; automatically enables `resume_training` |
+| `--resume_training` | `False` | Resume from `resume_from` or the latest checkpoint in `save_path` |
+| `--max_ckpt_num` | `-1` | Maximum checkpoints to retain for this run; -1 keeps all |
+
+Checkpoints are also saved at the end of every epoch. Steps count optimizer
+updates for SFT and off-policy KD, and rollout iterations for on-policy KD.
+For off-policy KD, positive `save_steps` and `eval_steps` must be multiples of
+`teacher_forward_n_batches`.
+Epochs are numbered starting from 1:
+
+```text
+$save_path/
+├── epoch_1_global_step_100/
+│   ├── model/
+│   └── training_state/          # with --save_training_state True
+├── epoch_1_end_global_step_200/
+│   ├── model/
+│   └── training_state/
+└── latest                      # text file naming the latest resumable checkpoint
+```
+
+`model/` contains the Hugging Face model or LoRA adapter. Use this directory
+for inference or as the starting model for a new training run.
+`training_state/` contains per-rank optimizer, scheduler, RNG, dataloader,
+progress, and checkpoint retention state, plus EMA, teacher, and projector
+weights when used by KD.
+
+When training finishes successfully, KDFlow also exports the final Hugging Face
+model (or LoRA adapter) and tokenizer/processor directly to `save_path`.
+This export does not modify checkpoint subdirectories, `latest`, or the retention list.
+
+To enable resuming, add `--save_training_state True` when saving.
+By default, training starts from scratch and ignores `latest`.
+Set `--resume_training True` to resume from `latest` in `save_path`;
+if no latest checkpoint exists, training raises an error.
+Alternatively, specify `--resume_from` to select a checkpoint and automatically
+enable `resume_training`. Pass the checkpoint directory, not its `model/`
+subdirectory. The checkpoint must be directly inside `save_path`.
+Resuming requires the same GPU count, `fsdp_size`, and
+`ring_attn_size` as the saved run.
+New saves always replace checkpoints with the same name after writing the new
+contents. A fresh run starts with an empty retention list; resuming restores
+the saved list. Other historical checkpoints are left alone.
+
+Add these flags to your training command to save resumable checkpoints every
+100 steps and retain the latest two:
+
+```bash
+--save_path ./ckpt/my_run \
+--save_training_state True \
+--save_steps 100 \
+--max_ckpt_num 2
+```
+
+To resume the latest checkpoint, rerun the command with:
+
+```bash
+--resume_training True
+```
+
+To resume a specific checkpoint instead, add:
+
+```bash
+--resume_from ./ckpt/my_run/epoch_1_global_step_100
+```
+
+`resume_from` automatically enables `resume_training`.
 
 ---
 

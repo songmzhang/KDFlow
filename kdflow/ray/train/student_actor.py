@@ -92,6 +92,8 @@ class StudentRayActor:
         self.args = strategy.args
         self.max_steps = max_steps
         self.strategy = strategy
+        self._is_sleeping = False
+        self.teacher_state = None
 
         strategy.setup_distributed()
 
@@ -168,16 +170,6 @@ class StudentRayActor:
                     scheduler_specific_kwargs={"min_lr": self.args.train.min_lr},
                 )
                 strategy.print(f"Registered {len(projector_params)} projector params into optimizer with lr={projector_lr}")
-
-        # load checkpoint
-        self.checkpoint_states = {}
-        ckpt_path = self.args.train.ckpt_path
-        if os.path.exists(ckpt_path):
-            strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            _, states = strategy.load_ckpt(self.student.model, ckpt_path)
-            self.checkpoint_states["global_step"] = states["global_step"]
-            self.checkpoint_states["epoch"] = states["epoch"]
-            self.checkpoint_states["data_loader_state_dict"] = states["data_loader_state_dict"]
 
         # initial offload
         if self.args.train.enable_sleep:
@@ -321,7 +313,7 @@ class StudentRayActor:
 
         if self.args.train.use_dynamic_bsz:
             self.strategy.accumulated_gradient = len(train_data)
-            self.strategy.step = 0
+            self.strategy.grad_accum_step = 0
 
         for batch in train_data:
             micro_batch = self._prepare_micro_batch(batch)
@@ -346,7 +338,7 @@ class StudentRayActor:
 
             self.strategy.optimizer_step(self.optim, self.student, self.scheduler)
 
-            if self.args.kd.use_ema_teacher and self.strategy.step == 0:
+            if self.args.kd.use_ema_teacher and self.strategy.grad_accum_step == 0:
                 self.ema_update()
 
             if "response_length" in micro_batch:
@@ -401,23 +393,44 @@ class StudentRayActor:
         metrics["eval/num_tokens"] = num_tokens / self.args.model.ring_attn_size
         return normalize_eval_metrics(metrics)
 
-    def save_model(self, save_path=None):
-        """Save model checkpoint after fitting on only rank0."""
-        if save_path is None:
-            save_path = self.args.train.save_path
-        self.strategy.save_model(self.student, save_path)
+    def load_checkpoint(self, checkpoint_path):
+        from torch.distributed.tensor import DTensor
 
-    def get_checkpoint_states(self):
-        return self.checkpoint_states
+        state = self.strategy.load_checkpoint(
+            self.student,
+            checkpoint_path,
+            optimizer=self.optim,
+            scheduler=self.scheduler,
+        )
+        extra_state = state.pop("extra_state")
+        model_state = self.student.model.state_dict()
+        for key in ("ema_state", "teacher_state"):
+            weights = extra_state[key]
+            if weights is not None:
+                for name, value in weights.items():
+                    param = model_state[name]
+                    if isinstance(param, DTensor):
+                        weights[name] = DTensor.from_local(
+                            value, param.device_mesh, param.placements,
+                            shape=param.shape, stride=param.stride(),
+                        ).cpu()
+            setattr(self, key, weights)
+        if hasattr(self.kd_algorithm, "get_projector_params"):
+            for param, value in zip(self.kd_algorithm.get_projector_params(), extra_state["projectors"]):
+                param.data.copy_(value)
+        if self._is_sleeping:
+            self.sleep()
+        return state
 
     def wakeup(self):
-        """Reload optimizer states from CPU to GPU."""
-        self.strategy.reload_model_params(self.student)
+        """Move model parameters, teacher lm_head, and optimizer states to GPU."""
+        self.strategy.onload_model_params(self.student)
         if isinstance(self.teacher_lm_head, dict):
             self.teacher_lm_head = {k: v.cuda() for k, v in self.teacher_lm_head.items()}
         else:
             self.teacher_lm_head = self.teacher_lm_head.cuda()
-        self.strategy.reload_optim_states(self.optim)
+        self.strategy.onload_optim_states(self.optim)
+        self._is_sleeping = False
 
     def sleep(self):
         """Offload optimizer states from GPU to CPU to save memory."""
@@ -427,21 +440,41 @@ class StudentRayActor:
         else:
             self.teacher_lm_head = self.teacher_lm_head.cpu()
         self.strategy.offload_model_params(self.student, empty_cache=True)
+        self._is_sleeping = True
 
-    def save_checkpoint(self, tag, client_states):
-        self.strategy.save_ckpt(
-            self.student.model,
-            os.path.join(self.args.train.ckpt_path, "_actor"),
-            tag,
-            self.args.train.max_ckpt_num,
-            self.args.train.max_ckpt_mem,
-            client_states,
-        )
-        if self.save_hf_ckpt:
-            save_path = os.path.join(self.args.train.ckpt_path, f"{tag}_hf")
-            self.strategy.save_model(self.student, save_path)
-        # wait
-        torch_dist_barrier_and_cuda_sync()
+    def save_model(self, save_path):
+        """Export the HF model or adapter."""
+        if self._is_sleeping:
+            self.strategy.onload_model_params(self.student)
+        try:
+            return self.strategy.save_model(self.student, save_path)
+        finally:
+            if self._is_sleeping:
+                self.strategy.offload_model_params(self.student, empty_cache=True)
+
+    def save_checkpoint(self, epoch, global_step, *, epoch_end=False, trainer_state=None):
+        """Save a checkpoint with optional training and KD state."""
+        extra_state = None
+        if self.args.ckpt.save_training_state:
+            extra_state = {"ema_state": self.ema_state, "teacher_state": self.teacher_state}
+            if hasattr(self.kd_algorithm, "get_projector_params"):
+                extra_state["projectors"] = [param.detach() for param in self.kd_algorithm.get_projector_params()]
+        if self._is_sleeping:
+            self.strategy.onload_model_params(self.student)
+        try:
+            return self.strategy.save_checkpoint(
+                self.student,
+                epoch,
+                global_step,
+                epoch_end=epoch_end,
+                optimizer=self.optim,
+                scheduler=self.scheduler,
+                trainer_state=trainer_state,
+                extra_state=extra_state,
+            )
+        finally:
+            if self._is_sleeping:
+                self.strategy.offload_model_params(self.student, empty_cache=True)
         
     @torch.no_grad()
     def ema_update(self):
@@ -494,13 +527,24 @@ class StudentRayActor:
                 self._ipc_teacher_actor = actor
                 self._teacher_internal_rank = dist.get_rank() - start_rank
     
-    def update_teacher_weights(self):
+    def update_teacher_weights(self, restore=False):
         """Stream FSDP weights to teacher actors via Gloo gather + CUDA IPC."""
         model = self.student.model
+        if restore:
+            weight_source = self.teacher_state
+        else:
+            weight_source = self.ema_state
+            if self.args.ckpt.save_training_state:
+                weights = model.state_dict()
+                if weight_source is not None:
+                    weights.update(weight_source)
+                self.teacher_state = {
+                    name: param.detach().cpu().clone() for name, param in weights.items()
+                }
         self.strategy.update_rollout_weights_from_tensor(
             model,
             engine=self._ipc_teacher_actor,
             gather_src=self._ipc_gather_src_for_teacher,
             gather_group=self._ipc_gather_group_for_teacher,
-            weight_source=self.ema_state
+            weight_source=weight_source,
         )

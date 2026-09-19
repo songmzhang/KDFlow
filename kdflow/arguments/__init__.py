@@ -8,6 +8,7 @@ from transformers import HfArgumentParser
 from kdflow.arguments.data_args import DataArguments
 from kdflow.arguments.model_args import ModelArguments
 from kdflow.arguments.training_args import TrainingArguments
+from kdflow.arguments.ckpt_args import CheckpointArguments
 from kdflow.arguments.fsdp_args import FSDPArguments
 from kdflow.arguments.distillation_args import DistillationArguments
 from kdflow.arguments.rollout_args import RolloutArguments
@@ -22,6 +23,7 @@ class AllArguments:
     data: DataArguments = field(default_factory=DataArguments)
     model: ModelArguments = field(default_factory=ModelArguments)
     train: TrainingArguments = field(default_factory=TrainingArguments)
+    ckpt: CheckpointArguments = field(default_factory=CheckpointArguments)
     fsdp: FSDPArguments = field(default_factory=FSDPArguments)
     kd: DistillationArguments = field(default_factory=DistillationArguments)
     rollout: RolloutArguments = field(default_factory=RolloutArguments)
@@ -44,6 +46,7 @@ def init_args(scenario: str = "sft"):
         DataArguments,
         ModelArguments,
         TrainingArguments,
+        CheckpointArguments,
         FSDPArguments,
         DistillationArguments,
         RolloutArguments,
@@ -53,6 +56,7 @@ def init_args(scenario: str = "sft"):
         data_args, 
         model_args, 
         train_args, 
+        ckpt_args,
         fsdp_args,
         kd_args, 
         rollout_args, 
@@ -63,6 +67,7 @@ def init_args(scenario: str = "sft"):
         data=data_args,
         model=model_args,
         train=train_args,
+        ckpt=ckpt_args,
         fsdp=fsdp_args,
         kd=kd_args,
         rollout=rollout_args,
@@ -70,6 +75,14 @@ def init_args(scenario: str = "sft"):
     )
     
     # Validate arguments
+    if scenario == "off_policy_kd":
+        for name, interval in (("save_steps", args.ckpt.save_steps), ("eval_steps", args.train.eval_steps)):
+            if interval != float("inf") and interval % args.kd.teacher_forward_n_batches != 0:
+                raise ValueError(
+                    f"--{name} ({interval}) must be a multiple of "
+                    f"--teacher_forward_n_batches ({args.kd.teacher_forward_n_batches}) for off-policy KD."
+                )
+
     if scenario != "on_policy_kd" and args.data.custom_eval_fn is not None:
         logger.warning(
             f"`--custom_eval_fn` is only supported in the `on_policy_kd` scenario "
