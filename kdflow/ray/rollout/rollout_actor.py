@@ -12,6 +12,8 @@ from typing import Optional
 
 import ray
 import requests
+from packaging.version import Version
+from sglang import __version__ as sglang_version
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils import kill_process_tree
 
@@ -107,6 +109,7 @@ class RolloutRayActor:
         server_args_dict["host"] = server_args_dict["host"].strip("[]")
 
         self.node_rank = server_args_dict.get("node_rank", 0)
+        self.tp_size = server_args_dict["tp_size"]
 
         logger.info(
             f"[RolloutActor {self.rank}] Launching server at {self.server_host}:{self.server_port} "
@@ -176,17 +179,17 @@ class RolloutRayActor:
     def load_lora_adapter(self, lora_name: str, adapter: dict):
         from sglang.srt.utils import MultiprocessingSerializer
 
-        serialized_tensors = MultiprocessingSerializer.serialize(
-            adapter["state_dict"], output_str=True
-        )
-        return self._make_request(
-            "load_lora_adapter_from_tensors",
-            {
-                "lora_name": lora_name,
-                "config_dict": adapter["config_dict"],
-                "serialized_tensors": serialized_tensors,
-            },
-        )
+        payload = {"lora_name": lora_name, "config_dict": adapter["config_dict"]}
+        if Version(sglang_version) >= Version("0.5.17"):
+            payload["serialized_named_tensors"] = [
+                MultiprocessingSerializer.serialize(adapter["state_dict"], output_str=True)
+                for _ in range(self.tp_size)
+            ]
+        else:
+            payload["serialized_tensors"] = MultiprocessingSerializer.serialize(
+                adapter["state_dict"], output_str=True
+            )
+        return self._make_request("load_lora_adapter_from_tensors", payload)
 
     def unload_lora_adapter(self, lora_name: str, ignore_errors: bool = False):
         try:
