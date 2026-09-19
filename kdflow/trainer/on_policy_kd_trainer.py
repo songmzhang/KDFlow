@@ -204,6 +204,7 @@ class OnPolicyKDTrainer:
                 if self.args.train.enable_sleep:
                     self.teacher.sleep(tags=["weights"])
         
+        self.start_global_step = self.global_step
         self.start_time = time.time()
         num_micro_batches = self.args.train.train_batch_size // self.args.train.micro_train_batch_size
 
@@ -366,8 +367,11 @@ class OnPolicyKDTrainer:
             
     def logging(self):
         if self.global_step % self.args.log.logging_steps == 0:
-            progress = self.global_step / self.num_rollout_iters_per_epoch / self.epochs
-            eta = int(time.time() - self.start_time) * (1 - progress) / progress
+            total_steps = self.num_rollout_iters_per_epoch * self.epochs
+            progress = self.global_step / total_steps
+            elapsed = time.time() - self.start_time
+            completed_steps = self.global_step - self.start_global_step
+            eta = elapsed / completed_steps * (total_steps - self.global_step)
             progress_str = "epoch [{current_epoch}/{total_epoch}], " \
                 "step [{current_step}/{total_step}], " \
                 "train_progress [{progress:.2f}%], " \
@@ -376,9 +380,9 @@ class OnPolicyKDTrainer:
                 current_epoch=self.current_epoch + 1, 
                 total_epoch=self.epochs, 
                 current_step=self.global_step, 
-                total_step=self.num_rollout_iters_per_epoch * self.epochs, 
+                total_step=total_steps,
                 progress=progress * 100,
-                elapsed=str(timedelta(seconds=(time.time() - self.start_time))).split(".")[0],
+                elapsed=str(timedelta(seconds=elapsed)).split(".")[0],
                 eta=str(timedelta(seconds=eta)).split(".")[0]
             )
             for k in self.log_state:
