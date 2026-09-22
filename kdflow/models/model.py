@@ -17,6 +17,7 @@ from kdflow.models.packing_utils import (
     prepare_packed_inputs,
     register_vision_packing_hook,
 )
+from kdflow.utils.multimodal_utils import register_dummy_vision_hook
 
 
 class DistillModel(nn.Module):
@@ -106,6 +107,9 @@ class DistillModel(nn.Module):
         self.packing_samples = self.args.data.packing_samples
         if self.packing_samples and self.is_vl_model:
             register_vision_packing_hook(self.model)
+        self.enable_dummy_vision_hook = model_type == "qwen3_5" and self.args.data.image_key is not None
+        if self.enable_dummy_vision_hook:
+            register_dummy_vision_hook(self.model)
         
         self._print_model()
 
@@ -126,6 +130,12 @@ class DistillModel(nn.Module):
                 model_inputs.update(packing_kwargs)
         else:
             model_inputs = dict(kwargs, input_ids=sequences, attention_mask=attention_mask, position_ids=None)
+
+        if self.enable_dummy_vision_hook:
+            model_inputs["_fsdp_dummy_vision"] = (
+                model_inputs.get("pixel_values") is None
+                and model_inputs.get("pixel_values_videos") is None
+            )
 
         output = self.model(**model_inputs)
         # lm_head is patched to identity (skip=True), so output["logits"]
