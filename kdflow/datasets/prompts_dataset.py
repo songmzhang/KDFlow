@@ -1,8 +1,6 @@
-from typing import Callable, Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List
 
 from torch.utils.data import Dataset
-from datasets import Image as ImageFeature
-from PIL import Image
 
 from kdflow.datasets.utils import (
     convert_to_openai_messages,
@@ -41,7 +39,6 @@ class PromptDataset(Dataset):
         self.template_identical = self.tokenizer_info.template_identical
         self.vocab_identical = self.tokenizer_info.vocab_identical
         self.same_tokenizer = self.tokenizer_info.is_identical
-        self.strategy = strategy
         self.input_template = input_template
         
         # Config from strategy
@@ -60,8 +57,6 @@ class PromptDataset(Dataset):
             required_columns["teacher_input_key"] = self.teacher_input_key
         if self.label_key:
             required_columns["label_key"] = self.label_key
-        if self.image_key:
-            required_columns["image_key"] = self.image_key
         if self.args.kd.multi_teacher_config:
             required_columns["teacher_routing_key"] = self.args.data.teacher_routing_key
         validate_dataset_columns(dataset, **required_columns)
@@ -88,94 +83,89 @@ class PromptDataset(Dataset):
             strategy.log(f"Truncating dataset from {len(dataset)} to {max_data_num}")
             dataset = dataset.select(range(max_data_num))
 
-        # Adjust worker count based on dataset size to speed up preprocessing.
-        num_processors = min(
-            num_processors,
-            max(1, len(dataset) // 2000),
+        num_processors = 1
+        strategy.log(
+            "Set num_processors to 1 for faster processing.",
+            level="warning",
         )
         self.processed_dataset = dataset.map(
             self.process_data,
             remove_columns=dataset.column_names,
-            num_proc=num_processors,
+            num_proc=num_processors if num_processors > 1 else None,
             load_from_cache_file=False,
             desc="Processing data",
         )
-        if self.image_key:
-            self.processed_dataset = self.processed_dataset.cast_column("images", [ImageFeature()])
-
-        # Filter by prompt_max_len
-        original_len = len(self.processed_dataset)
+        self.processed_dataset = self.processed_dataset.map(
+            self._compute_prompt_lengths,
+            input_columns=["stu_prompt"],
+            batched=True,
+            batch_size=512,
+            load_from_cache_file=False,
+            desc="Computing prompt lengths",
+        )
         if self.prompt_max_len > 0:
-            strategy.log(f"Before prompt_max_len filter: {len(self.processed_dataset)}")
+            original_len = len(self.processed_dataset)
             self.processed_dataset = self.processed_dataset.filter(
                 lambda prompt_len: prompt_len <= self.prompt_max_len,
                 input_columns=["prompt_len"],
-                desc="Filtering overlang samples",
+                load_from_cache_file=False,
+                desc="Filtering long prompts",
             )
-            strategy.log(f"After prompt_max_len filter: {len(self.processed_dataset)}")
-            if len(self.processed_dataset) < original_len:
-                self.strategy.log(
-                    f"Filtered {original_len - len(self.processed_dataset)} samples "
-                    f"exceeding prompt_max_len={self.prompt_max_len} "
-                    f"({original_len} -> {len(self.processed_dataset)})"
-                )
-                
+            filtered_count = original_len - len(self.processed_dataset)
+            strategy.log(f"Filtered {filtered_count} samples exceeding prompt_max_len={self.prompt_max_len}.")
+
         self._print_sample()
 
     def _print_sample(self) -> None:
         """Print sample data for debugging."""
         self.strategy.print(f"Total samples: {len(self.processed_dataset)}")
+        if len(self.processed_dataset) == 0:
+            return
         self.strategy.print(f"Sample student prompt:\n{self.processed_dataset[0]['stu_prompt']}")
         if not self.template_identical or self.teacher_input_key != self.input_key:
             self.strategy.print(f"Sample teacher prompt:\n{self.processed_dataset[0]['tea_prompt']}")
 
     def process_data(self, data: Dict) -> Dict[str, Any]:
-        """Process a single data sample."""
-        # Build student prompt
+        """Build prompts for each sample and keep raw image paths."""
         stu_prompt = self._build_prompt(data, self.student_processor, self.input_key)
-        
-        # Build teacher prompt
-        if self.args.kd.multi_teacher_config:
-            routing_key = self.args.data.teacher_routing_key
-            assert routing_key is not None, "`--teacher_routing_key` must be specified when using multi_teacher_config"
-            assert routing_key in data, f"Routing key '{routing_key}' not found in data"
+        routing_key = self.args.data.teacher_routing_key if self.args.kd.multi_teacher_config else None
+        if routing_key:
             teacher_key = data[routing_key]
             if teacher_key not in self.teacher_processors:
                 raise ValueError(
                     f"Teacher routing key '{teacher_key}' not found in multi_teacher_config. "
-                    f"Available keys: {list(self.teacher_processors.keys())}."
+                    f"Available keys: {list(self.teacher_processors)}."
                 )
             teacher_processor = self.teacher_processors[teacher_key]
             tea_prompt = self._build_prompt(data, teacher_processor, self.teacher_input_key)
         elif self.same_tokenizer and self.input_key == self.teacher_input_key:
             tea_prompt = stu_prompt
         else:
-            tea_prompt = self._build_prompt(data, self.teacher_processors.get("default", self.student_processor), self.teacher_input_key)
-        
-        # Compute prompt token length for filtering
-        tokenizer = self.student_processor.tokenizer if hasattr(self.student_processor, "tokenizer") else self.student_processor
-        prompt_len = len(tokenizer.encode(stu_prompt))
+            teacher_processor = self.teacher_processors.get("default", self.student_processor)
+            tea_prompt = self._build_prompt(data, teacher_processor, self.teacher_input_key)
 
         result = {
             "stu_prompt": stu_prompt,
             "tea_prompt": tea_prompt,
-            "prompt": stu_prompt,
-            "prompt_len": prompt_len,
             "label": data.get(self.label_key, "") if self.label_key else "",
             "datasource": data.get("datasource", "default"),
         }
-        # Load images if multimodal
         if self.image_key:
-            result["images"] = self._load_images(data.get(self.image_key))
-            
-        # load teacher routing info of each data for multi-teacher distillation
-        if self.args.kd.multi_teacher_config is not None:
-            assert self.args.data.teacher_routing_key is not None, "`--teacher_routing_key` must be specified when using multi_teacher_config"
-            assert self.args.data.teacher_routing_key in data, f"Routing key '{self.args.data.teacher_routing_key}' not found in data"
-            result["teacher_routing_key"] = data[self.args.data.teacher_routing_key]
-            
+            images = data.get(self.image_key) or []
+            result["images"] = [images] if isinstance(images, str) else images
+        if routing_key:
+            result["teacher_routing_key"] = teacher_key
         return result
-    
+
+    def _compute_prompt_lengths(self, prompts: List[str]) -> Dict[str, List[int]]:
+        """Compute the prompt_len column with batch-level tokenization."""
+        tokenizer = getattr(self.student_processor, "tokenizer", self.student_processor)
+        encoded = tokenizer(
+            prompts, add_special_tokens=True, padding=False, truncation=False,
+            return_attention_mask=False, return_token_type_ids=False,
+        )
+        return {"prompt_len": [len(input_ids) for input_ids in encoded["input_ids"]]}
+
     def _build_prompt(self, data: Dict, processor_or_tokenizer, input_key: str) -> str:
         """Build prompt from data with optional chat template or input template.
         
@@ -207,7 +197,7 @@ class PromptDataset(Dataset):
     def __len__(self) -> int:
         return len(self.processed_dataset)
 
-    def __getitem__(self, idx: int) -> Dict[str, str]:
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
         """Get item by index.
         
         Returns:
@@ -227,26 +217,7 @@ class PromptDataset(Dataset):
         return result
 
     @staticmethod
-    def _load_images(image_content) -> list:
-        """Load image(s) from various input formats. Always returns a list."""
-        if image_content is None:
-            return []
-        if isinstance(image_content, Image.Image):
-            return [image_content]
-        if isinstance(image_content, str):
-            return [Image.open(image_content).convert("RGB")]
-        if isinstance(image_content, list):
-            result = []
-            for img in image_content:
-                if isinstance(img, Image.Image):
-                    result.append(img)
-                elif isinstance(img, str):
-                    result.append(Image.open(img).convert("RGB"))
-            return result
-        return []
-
-    @staticmethod
-    def collate_fn(batch: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    def collate_fn(batch: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Collate function that simply returns the list of dicts.
         
         DataLoader will pass a list of dicts, we just return it as-is

@@ -3,6 +3,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import torch
+from PIL import Image
 
 from kdflow.datasets.utils import get_tokenizer_or_processor
 from kdflow.utils.utils import zero_pad_sequences
@@ -251,12 +252,17 @@ class RolloutDataProcessor:
             bool(response_ids) and response_ids[-1] == student_tokenizer.eos_token_id
         )
 
+        loaded_images = []
+        for image_path in images or []:
+            with Image.open(image_path) as image:
+                loaded_images.append(image.convert("RGB"))
+
         stu_tokens = self._tokenize_sample(
             stu_prompt,
             response_text,
             self.student_processor,
             "stu",
-            images=images,
+            images=loaded_images,
             response_ids=response_ids,
         )
         stu_loss_mask = stu_tokens["stu_loss_mask"].bool()
@@ -306,10 +312,8 @@ class RolloutDataProcessor:
             "total_length": torch.FloatTensor([[total_length]]),
         }
         stu_multi_modal_inputs = stu_tokens.get("_stu_multi_modal_inputs")
-        if stu_multi_modal_inputs is not None:
-            sample["stu_multi_modal_inputs"] = [stu_multi_modal_inputs]
-        if images:
-            sample["images"] = [images]
+        sample["stu_multi_modal_inputs"] = [stu_multi_modal_inputs]
+        sample["images"] = [images or []]
         if teacher_routing_key is not None:
             sample["teacher_routing_key"] = teacher_routing_key
         return sample
