@@ -119,12 +119,6 @@ def init_args(scenario: str = "sft"):
                     "--ring_attn_size 1. Auto-disabling --packing_samples."
                 )
                 args.data.packing_samples = False
-            elif args.data.image_key is not None:
-                logger.warning(
-                    "--packing_samples for linear-attention models currently only supports text-only data. "
-                    "Auto-disabling --packing_samples."
-                )
-                args.data.packing_samples = False
 
     total_gpus = args.train.num_nodes * args.train.num_gpus_per_node
 

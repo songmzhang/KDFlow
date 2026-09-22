@@ -2,18 +2,6 @@ import torch
 import torch.distributed as dist
 
 
-def _require_flash_attn():
-    """Deferred import — only needed for packing_samples=True."""
-    try:
-        from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
-        from flash_attn.utils.distributed import all_gather as _fa_all_gather
-    except ModuleNotFoundError as e:
-        raise ModuleNotFoundError(
-            "flash_attn is required for packing_samples=True. "
-            "Install with: pip install flash_attn --no-build-isolation"
-        ) from e
-    return index_first_axis, pad_input, rearrange, unpad_input, _fa_all_gather
-
 RING_ATTN_GROUP = None
 
 
@@ -96,102 +84,11 @@ def get_tensor_in_current_ring_attn_rank(tensors: list[torch.Tensor] | torch.Ten
     return output_tensors, ring_attn_pad_len
 
 
-def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
-    """
-    Unpad and slice tensor for distributed training with ring attention.
+def gather_ring_attn_tensor(tensor, ring_attn_group, ring_attn_pad_len):
+    """Gather ring shards with autograd support and remove ring padding."""
+    from flash_attn.utils.distributed import all_gather
 
-    This function performs several operations:
-    1. Removes padding, unpads sequences from (batch, seqlen) to (1, total_seqs)
-    2. Adapts to ring_attn_group, pads sequences to be divisible by ring_attn_group
-    3. Slices the sequences for the current ring_attn_rank
-
-    Example:
-        >>> # Input sequences shape: (batch=2, seqlen=4)
-        >>> sequences = [[1, 2, 3, 0], [4, 5, 0, 0]]  # 0 is padding
-        >>> attention_mask = [[1, 1, 1, 0], [1, 1, 0, 0]]
-        >>> # After unpad:
-        >>> # sequences: [1, 2, 3, 4, 5]  # shape (1, total_seqs=5)
-        >>> # If ring_attn_group size is 2, it will pad to length 6
-        >>> # Then slice for current rank (e.g., rank 0 gets [1,2,3], rank 1 gets [4,5,0])
-
-    Args:
-        sequences: Input sequences tensor of shape (batch, seqlen)
-        attention_mask: Attention mask tensor for the sequences
-        ring_attn_group: Ring attention group for distributed processing
-
-    Returns:
-        tuple: Processed sequences and related tensors for ring attention
-
-    Note:
-        Requires ``flash_attn`` — only called when ``packing_samples=True``.
-    """
-    index_first_axis, pad_input, rearrange, unpad_input, _ = _require_flash_attn()
-
-    rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
-    sequences, indices, cu_seqlens, max_seqlen, _ = unpad_input(sequences.unsqueeze(-1), attention_mask)
-    sequences = sequences.transpose(0, 1)  # (1, total_seqs)
-    seq_idx = torch.arange(attention_mask.shape[0], dtype=torch.int32, device=attention_mask.device)
-    seq_idx = seq_idx[:, None].expand_as(attention_mask)[attention_mask.bool()].unsqueeze(0)
-    rolled_sequences = index_first_axis(
-        rearrange(rolled_sequences.unsqueeze(-1), "b s ... -> (b s) ..."), indices
-    ).transpose(
-        0, 1
-    )  # (1, total_seqs)
-    position_ids = torch.clip(torch.cumsum(attention_mask, dim=-1) - 1, min=0, max=None)
-    position_ids = index_first_axis(rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(
-        0, 1
-    )  # (1, total_seqs)
-    ring_attn_pad_len = 0
-    if ring_attn_group is not None:
-        (sequences, position_ids, rolled_sequences), ring_attn_pad_len = get_tensor_in_current_ring_attn_rank(
-            [sequences, position_ids, rolled_sequences], ring_attn_group, 0
-        )
-        cu_seqlens[-1] += ring_attn_pad_len
-        update_ring_attn_params(cu_seqlens)
-    packing_kwargs = {
-        "seq_idx": seq_idx,
-        "cu_seq_lens_q": cu_seqlens,
-        "cu_seq_lens_k": cu_seqlens,
-        "max_length_q": max_seqlen,
-        "max_length_k": max_seqlen,
-    }
-    return sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices, packing_kwargs
-
-
-def gather_and_pad_tensor(tensor, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen):
-    """
-    Gather and pad tensor data (such as logits, log_probs, etc.).
-
-    Example:
-        >>> # Input tensor from each rank (shape: (1, local_seq_len))
-        >>> # Rank 0: [1, 2, 3]
-        >>> # Rank 1: [4, 5, 0]  # 0 is padding
-        >>> # After all_gather:
-        >>> # tensor: [1, 2, 3, 4, 5, 0]  # shape (1, total_seqs=6)
-        >>> # After removing padding (ring_attn_pad_len=1):
-        >>> # tensor: [1, 2, 3, 4, 5]  # shape (1, total_seqs=5)
-        >>> # After pad_input with original indices:
-        >>> # tensor: [[1, 2, 3, 0], [4, 5, 0, 0]]  # shape (batch=2, seqlen=4)
-
-    Args:
-        tensor: Input tensor, can be logits, log_probs, etc.
-        ring_attn_group: Ring attention group
-        ring_attn_pad_len: Padding length
-        indices: Indices
-        batch: Batch size
-        seqlen: Sequence length
-
-    Returns:
-        Padded tensor
-
-    Note:
-        Requires ``flash_attn`` — only called when ``packing_samples=True``.
-    """
-    _, pad_input, _, _, fa_all_gather = _require_flash_attn()
-
-    if ring_attn_group is not None:
-        tensor = fa_all_gather(tensor.transpose(0, 1), ring_attn_group).transpose(0, 1)  # (1, total_seqs)
-        if ring_attn_pad_len > 0:
-            tensor = tensor[:, :-ring_attn_pad_len]
-    tensor = pad_input(tensor.transpose(0, 1), indices, batch, seqlen).squeeze(-1)  # (batch, seqlen)
+    tensor = all_gather(tensor.transpose(0, 1), ring_attn_group).transpose(0, 1)
+    if ring_attn_pad_len > 0:
+        tensor = tensor[:, :-ring_attn_pad_len]
     return tensor

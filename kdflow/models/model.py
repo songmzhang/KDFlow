@@ -12,7 +12,11 @@ from transformers import (
 )
 
 from kdflow.datasets.utils import get_tokenizer_or_processor
-from kdflow.models.ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
+from kdflow.models.packing_utils import (
+    gather_and_pad_tensor,
+    prepare_packed_inputs,
+    register_vision_packing_hook,
+)
 
 
 class DistillModel(nn.Module):
@@ -100,6 +104,8 @@ class DistillModel(nn.Module):
 
         # packing samples using Flash Attention 2
         self.packing_samples = self.args.data.packing_samples
+        if self.packing_samples and self.is_vl_model:
+            register_vision_packing_hook(self.model)
         
         self._print_model()
 
@@ -112,37 +118,23 @@ class DistillModel(nn.Module):
         **kwargs,
     ) -> torch.Tensor:
         """Returns action log probs"""
-        batch, seqlen = sequences.size()
-        foward_attention_mask = attention_mask
         if self.packing_samples:
-            (
-                sequences,
-                position_ids,
-                rolled_sequences,
-                ring_attn_pad_len,
-                indices,
-                packing_kwargs,
-            ) = unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group)
-            foward_attention_mask = None
-            if self.is_linear_attention:
-                kwargs = {**kwargs, **packing_kwargs}
+            model_inputs, packing_kwargs, restore_kwargs = prepare_packed_inputs(
+                self.model, sequences, attention_mask, ring_attn_group, **kwargs,
+            )
+            if self.is_linear_attention or self.is_vl_model:
+                model_inputs.update(packing_kwargs)
         else:
-            position_ids = None
+            model_inputs = dict(kwargs, input_ids=sequences, attention_mask=attention_mask, position_ids=None)
 
-        output = self.model(
-            sequences, 
-            attention_mask=foward_attention_mask, 
-            position_ids=position_ids, 
-            **kwargs
-        )
+        output = self.model(**model_inputs)
         # lm_head is patched to identity (skip=True), so output["logits"]
         # are actually final hidden states.
         output = {"hidden_states": [output["logits"]]}
             
         if allgather_logits and self.packing_samples:
             output["hidden_states"][-1] = gather_and_pad_tensor(
-                output["hidden_states"][-1], ring_attn_group, 
-                ring_attn_pad_len, indices, batch, seqlen
+                output["hidden_states"][-1], **restore_kwargs,
             ).squeeze(-2)
         return output
 
