@@ -127,8 +127,7 @@ class DistillModel(nn.Module):
             if self.is_linear_attention:
                 kwargs = {**kwargs, **packing_kwargs}
         else:
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
+            position_ids = None
 
         output = self.model(
             sequences, 
