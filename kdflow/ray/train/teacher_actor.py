@@ -1,4 +1,5 @@
 import os
+import socket
 
 import ray
 import torch
@@ -79,6 +80,10 @@ class TeacherRayActor:
         
         # Initialize SGLang Engine service (runs in subprocess)
         self.engine_service = SGLangEngineService(self.engine_config)
+
+    def init(self, nccl_port: int):
+        """Start the engine with the port assigned by TeacherActorGroup."""
+        self.engine_config.nccl_port = nccl_port
         self.engine_service.start()
         
         if self.strategy.args.train.enable_sleep and self.node_rank == 0:
@@ -90,6 +95,21 @@ class TeacherRayActor:
     def ready(self):
         """Return True when the actor is ready (engine service started)."""
         return self.engine_service._started
+
+    def get_node_ip(self) -> str:
+        return ray.util.get_node_ip_address().strip("[]")
+
+    def get_free_port(self, start_port: int) -> int:
+        """Find an available port on this actor's node."""
+        for port in range(start_port, 65536):
+            with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as sock:
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                try:
+                    sock.bind(("::", port))
+                except OSError:
+                    continue
+                return port
+        raise RuntimeError("No free port found")
 
     def forward(self, global_batch, batch_indices):
         """

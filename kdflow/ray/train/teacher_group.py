@@ -86,8 +86,7 @@ class TeacherActorGroup:
         logger.info(f"[TeacherActorGroup] Creating {self.dp_size} actors with tp_size={self.tp_size} * pp_size={self.pp_size}")
         
         self._create_actors(num_gpus_per_actor)
-        
-        ray.get([actor.ready.remote() for actor in self.teacher_engines])
+        self._init_actors()
         
         logger.info(f"[TeacherActorGroup] All {self.dp_size} actors ready.")
     
@@ -173,6 +172,20 @@ class TeacherActorGroup:
                 self.teacher_engines.append(actor)
             logger.info(f"[TeacherActorGroup] Actor {i} created, waiting for ready...")
     
+    def _init_actors(self):
+        """Allocate distinct ports per node, then start all engines in parallel."""
+        actors = self.teacher_engines + self._worker_actors
+        node_ips = ray.get([actor.get_node_ip.remote() for actor in actors])
+        next_ports = {}
+        ports = []
+        for actor, node_ip in zip(actors, node_ips):
+            port = ray.get(actor.get_free_port.remote(next_ports.get(node_ip, 20000)))
+            next_ports[node_ip] = port + 1
+            ports.append(port)
+            logger.info(f"[TeacherActorGroup] Assigned nccl_port={port} on node {node_ip}")
+
+        ray.get([actor.init.remote(port) for actor, port in zip(actors, ports)])
+
     @staticmethod
     def _format_host(host: str) -> str:
         if ":" in host and not host.startswith("["):

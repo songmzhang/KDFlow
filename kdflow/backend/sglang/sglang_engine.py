@@ -51,6 +51,7 @@ class EngineConfig:
     quantization: str = None
     offload_tags: Optional[str] = "all"
     base_gpu_id: int = 0
+    nccl_port: Optional[int] = None
     # for multi-node tp/pp
     nnodes: int = 1
     node_rank: int = 0
@@ -78,6 +79,7 @@ def _engine_worker(config: EngineConfig, request_queue: Queue, response_queue: Q
             quantization=config.quantization,
             mem_fraction_static=config.mem_fraction_static,
             base_gpu_id=config.base_gpu_id,
+            nccl_port=config.nccl_port,
             nnodes=config.nnodes,
             node_rank=config.node_rank,
             dist_init_addr=config.dist_init_addr,
