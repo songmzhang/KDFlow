@@ -233,6 +233,13 @@ class OnPolicyKDTrainer:
                     self.log_state[name].append(value)
 
                 all_global_batches = self._prepare_global_batches(rollout_samples, num_micro_batches)
+                micro_batch_tokens = [
+                    mb["stu_attn_mask"].sum().item()
+                    for global_batch in all_global_batches
+                    for mb in global_batch
+                ]
+                mean_tokens = sum(micro_batch_tokens) / len(micro_batch_tokens)
+                self.log_state["train/micro_batch_token_imbalance"].append(max(micro_batch_tokens) / mean_tokens)
 
                 teacher_start = time.time()
                 if self.args.train.enable_sleep:

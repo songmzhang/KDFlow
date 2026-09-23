@@ -213,6 +213,9 @@ class OffPolicyKDTrainer:
                     self.student.wakeup()
                 shared_step_time = (time.time() - step_group_start) / len(all_global_batches)
                 for global_batch in all_global_batches:
+                    micro_batch_tokens = [mb["stu_attn_mask"].sum().item() for mb in global_batch]
+                    mean_tokens = sum(micro_batch_tokens) / len(micro_batch_tokens)
+                    self.log_state["train/micro_batch_token_imbalance"].append(max(micro_batch_tokens) / mean_tokens)
                     student_start = time.time()
                     self.global_step += 1
                     status_list = ray.get(self.student.async_run_distill(global_batch))

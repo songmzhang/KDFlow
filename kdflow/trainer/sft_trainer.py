@@ -157,6 +157,17 @@ class SFTTrainer:
                     self.strategy.accumulated_gradient = len(global_batch)
                     self.strategy.grad_accum_step = 0
                 
+                micro_batch_tokens = [mb["stu_attn_mask"].sum().item() for mb in global_batch]
+                token_stats = torch.tensor(
+                    [sum(micro_batch_tokens), len(micro_batch_tokens)],
+                    dtype=torch.float64, device=torch.cuda.current_device(),
+                )
+                max_tokens = token_stats.new_tensor(max(micro_batch_tokens))
+                dist.all_reduce(token_stats, op=dist.ReduceOp.SUM, group=self.dp_group)
+                dist.all_reduce(max_tokens, op=dist.ReduceOp.MAX, group=self.dp_group)
+                imbalance = (max_tokens / (token_stats[0] / token_stats[1])).item()
+                self.log_state["train/micro_batch_token_imbalance"].append(imbalance)
+
                 global_batch_token_num = global_batch_token_num.to(torch.cuda.current_device())
                 dist.all_reduce(global_batch_token_num, op=dist.ReduceOp.SUM)
                 avg_micro_batch_token_num = global_batch_token_num / (len(global_batch) * dist.get_world_size())
