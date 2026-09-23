@@ -1,8 +1,29 @@
 """Multi-modal field helpers (verl-inspired)."""
+import base64
+from io import BytesIO
+from pathlib import Path
 from typing import Iterable, Optional
 
 import torch
 from peft import PeftModel
+from PIL import Image
+
+
+def load_rgb_image(image: str | Path | Image.Image) -> Image.Image:
+    """Load an image path or convert a PIL image to RGB."""
+    if isinstance(image, Image.Image):
+        return image.convert("RGB")
+    with Image.open(image) as opened:
+        return opened.convert("RGB")
+
+
+def encode_image_to_base64(image: str | Path | Image.Image) -> str:
+    """Encode an RGB image as a lossless PNG data URL for SGLang."""
+    image = load_rgb_image(image)
+    with BytesIO() as buffer:
+        image.save(buffer, format="PNG")
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
 
 
 def register_dummy_vision_hook(model):

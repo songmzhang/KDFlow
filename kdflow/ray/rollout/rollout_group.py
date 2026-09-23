@@ -1,6 +1,4 @@
 import asyncio
-import base64
-import io
 import multiprocessing
 import random
 import socket
@@ -13,6 +11,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from kdflow.ray.rollout.rollout_actor import RolloutRayActor
 from kdflow.utils.logging_utils import init_logger
+from kdflow.utils.multimodal_utils import encode_image_to_base64
 
 logger = init_logger(__name__)
 
@@ -247,10 +246,10 @@ class RolloutActorGroup:
         if image_data is not None:
             if isinstance(image_data, list):
                 payload["image_data"] = [
-                    self._encode_image_to_base64(image) for image in image_data
+                    await asyncio.to_thread(encode_image_to_base64, image) for image in image_data
                 ]
             else:
-                payload["image_data"] = self._encode_image_to_base64(image_data)
+                payload["image_data"] = await asyncio.to_thread(encode_image_to_base64, image_data)
 
         max_retries = 2
         generate_url = f"{self.router_url}/generate"
@@ -387,18 +386,3 @@ class RolloutActorGroup:
 
         logger.info(f"SGLang router launched successfully at {RolloutActorGroup._format_host(host)}:{port}")
         return process
-
-    @staticmethod
-    def _encode_image_to_base64(image) -> str:
-        """Convert a PIL Image to a base64-encoded string for SGLang API."""
-        from PIL import Image
-
-        if isinstance(image, str):
-            return image  # Already a base64 string or URL
-        if isinstance(image, Image.Image):
-            buffer = io.BytesIO()
-            fmt = "PNG" if image.mode == "RGBA" else "JPEG"
-            image.save(buffer, format=fmt)
-            encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
-            return f"data:image/{fmt.lower()};base64,{encoded}"
-        raise TypeError(f"Unsupported image type: {type(image)}")

@@ -3,9 +3,9 @@ import os
 from typing import Any, Dict, List, Optional
 
 import torch
-from PIL import Image
 
 from kdflow.datasets.utils import get_tokenizer_or_processor
+from kdflow.utils.multimodal_utils import load_rgb_image
 from kdflow.utils.utils import zero_pad_sequences
 
 
@@ -252,10 +252,7 @@ class RolloutDataProcessor:
             bool(response_ids) and response_ids[-1] == student_tokenizer.eos_token_id
         )
 
-        loaded_images = []
-        for image_path in images or []:
-            with Image.open(image_path) as image:
-                loaded_images.append(image.convert("RGB"))
+        loaded_images = [load_rgb_image(image) for image in images or []]
 
         stu_tokens = self._tokenize_sample(
             stu_prompt,

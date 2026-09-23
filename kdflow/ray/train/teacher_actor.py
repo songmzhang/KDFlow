@@ -8,6 +8,7 @@ import numpy as np
 from kdflow.utils.utils import remove_pad_token
 from kdflow.backend.sglang.sglang_engine import SGLangEngineService, EngineConfig
 from kdflow.utils.logging_utils import init_logger
+from kdflow.utils.multimodal_utils import load_rgb_image
 
 logger = init_logger(__name__)
 
@@ -147,7 +148,11 @@ class TeacherRayActor:
         # Collect image data if present
         image_data = None
         if batches[0].get("images") is not None:
-            image_data = sum((micro_batch["images"] for micro_batch in batches), [])
+            image_data = [
+                [load_rgb_image(image) for image in images or []]
+                for micro_batch in batches
+                for images in micro_batch["images"]
+            ]
         
         hidden_states_list = self.engine_service.generate(
             input_ids=input_ids,
