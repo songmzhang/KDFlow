@@ -141,7 +141,7 @@ class SimpleCrossTokenizerKD:
         def teacher_logits_fn(start, end):
             return teacher_lm_head(aligned_teacher_hiddens[start:end])[:, teacher_overlap_ids]
 
-        kd_loss, metric_sums = chunked_loss(
+        kd_loss, metric_stats = chunked_loss(
             aligned_student_hiddens, student_lm_head, self.loss_fn,
             student_logits_fn=student_logits_fn,
             teacher_logits_fn=teacher_logits_fn,
@@ -155,7 +155,7 @@ class SimpleCrossTokenizerKD:
             "train/kd_loss": kd_loss,
             "distill/alignment_ratio": align_ratio,
         }
-        loss_info.update({key: value / avg_token_num for key, value in metric_sums.items()})
+        loss_info["metric_stats"] = metric_stats
 
         if self.args.kd.kd_ratio < 1:
             ce_loss = chunked_loss(

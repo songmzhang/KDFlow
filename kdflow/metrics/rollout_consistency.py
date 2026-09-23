@@ -19,6 +19,6 @@ def compute_rollout_consistency(
     log_ratio = training_log_probs - rollout_log_probs
     k3_kl = log_ratio.exp() - log_ratio - 1
     return {
-        "rollout_corr/kl": -log_ratio.mean(),
-        "rollout_corr/k3_kl": k3_kl.mean(),
+        "rollout_corr/kl": (-log_ratio.sum(), log_ratio.numel()),
+        "rollout_corr/k3_kl": (k3_kl.sum(), k3_kl.numel()),
     }

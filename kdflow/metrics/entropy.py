@@ -10,7 +10,7 @@ def compute_entropy(student_logits, **kwargs):
         **kwargs: Unused. Accepts extra arguments for unified metric interface.
 
     Returns:
-        A dict containing the mean entropy value.
+        A dict mapping the metric name to (entropy sum, token count).
     """
     with torch.no_grad():
         chunk_tokens = 2048
@@ -30,4 +30,4 @@ def compute_entropy(student_logits, **kwargs):
         entropy = (
             torch.cat(entropy_parts) if len(entropy_parts) > 1 else entropy_parts[0]
         )
-    return {"distill/student_entropy": entropy.mean()}
+    return {"distill/student_entropy": (entropy.sum(), entropy.numel())}

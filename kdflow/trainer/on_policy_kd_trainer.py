@@ -12,6 +12,7 @@ from kdflow.utils.logging_utils import (
     log_eval_metrics,
     normalize_eval_metrics,
 )
+from kdflow.metrics import accumulate_metric_stats, average_metric_stats
 from kdflow.utils.dynamic_bsz import rearrange_global_batch
 from kdflow.backend.fsdp.checkpoint import resolve_resume_checkpoint
 
@@ -77,6 +78,7 @@ class OnPolicyKDTrainer:
         assert self.args.kd.kd_ratio == 1.0, "On-policy KD only supports kd_ratio=1.0."
         
         self.log_state = defaultdict(list)
+        self.metric_stats = {}
         self._init_loggers()
     
     def _init_loggers(self) -> None:
@@ -269,6 +271,7 @@ class OnPolicyKDTrainer:
                 
                 for global_batch in all_global_batches:
                     status_list = ray.get(self.student.async_run_distill(global_batch))
+                    accumulate_metric_stats(self.metric_stats, status_list[0].pop("metric_stats", {}))
                     for k in status_list[0].keys():
                         self.log_state[k].append(sum(s[k] for s in status_list) / len(status_list))
                         
@@ -398,8 +401,12 @@ class OnPolicyKDTrainer:
                     self.log_state[k] = (
                         max(values) if k.endswith("/max") else sum(values) / len(values)
                     )
+            for key in self.metric_stats:
+                self.log_state.pop(key, None)
+            self.log_state.update(average_metric_stats(self.metric_stats))
+            self.metric_stats.clear()
             log_info = []
-            for k in self.log_state:
+            for k in sorted(self.log_state):
                 # Skip keys that have no values logged in this interval (e.g. teacher weight sync
                 # is only logged every teacher_update_freq steps).
                 if isinstance(self.log_state[k], list):
@@ -415,7 +422,7 @@ class OnPolicyKDTrainer:
 
             if self._wandb is not None:
                 logs = {"train/global_step": self.global_step}
-                for k in self.log_state:
+                for k in sorted(self.log_state):
                     if isinstance(self.log_state[k], list):
                         continue
                     logs[k] = self.log_state[k]

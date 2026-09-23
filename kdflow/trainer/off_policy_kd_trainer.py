@@ -10,6 +10,7 @@ import torch.distributed as dist
 from tqdm import tqdm
 
 from kdflow.utils.logging_utils import define_wandb_metrics, init_logger, log_eval_metrics
+from kdflow.metrics import accumulate_metric_stats, average_metric_stats
 from kdflow.utils.dynamic_bsz import rearrange_global_batch
 from kdflow.backend.fsdp.checkpoint import resolve_resume_checkpoint
 
@@ -57,6 +58,7 @@ class OffPolicyKDTrainer:
         self.dp_size = self.world_size // self.args.model.ring_attn_size
         
         self.log_state = defaultdict(list)
+        self.metric_stats = {}
         self._init_loggers()
 
         if self.eval_dataloader and self.args.train.eval_steps < float("inf"):
@@ -220,6 +222,7 @@ class OffPolicyKDTrainer:
                     self.global_step += 1
                     status_list = ray.get(self.student.async_run_distill(global_batch))
                     student_step_train_time = time.time() - student_start
+                    accumulate_metric_stats(self.metric_stats, status_list[0].pop("metric_stats", {}))
                     for k in status_list[0].keys():
                         self.log_state[k].append(sum(s[k] for s in status_list) / len(status_list))
                     self.log_state["timing/teacher_forward_time"].append(teacher_step_fwd_time)
@@ -310,8 +313,12 @@ class OffPolicyKDTrainer:
                 if isinstance(self.log_state[k], list) and len(self.log_state[k]) > 0:
                     self.log_state[k] = sum(self.log_state[k]) / len(self.log_state[k])
                     
+            for key in self.metric_stats:
+                self.log_state.pop(key, None)
+            self.log_state.update(average_metric_stats(self.metric_stats))
+            self.metric_stats.clear()
             log_info = []
-            for k in self.log_state:
+            for k in sorted(self.log_state):
                 if k == "train/lr":
                     log_info.append(f"{k}: {self.log_state[k]:.6e}")
                 else:
@@ -322,7 +329,7 @@ class OffPolicyKDTrainer:
             
             if self._wandb is not None:
                 logs = {"train/global_step": self.global_step}
-                for k in self.log_state:
+                for k in sorted(self.log_state):
                     logs[k] = self.log_state[k]
                 self._wandb.log(logs)
             

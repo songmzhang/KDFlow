@@ -289,7 +289,7 @@ class SFTTrainer:
                     self.log_state[k] = sum(self.log_state[k]) / len(self.log_state[k])
             if dist.get_rank() == 0:
                 log_info = []
-                for k in self.log_state:
+                for k in sorted(self.log_state):
                     if k == "train/lr":
                         log_info.append(f"{k}: {self.log_state[k]:.6e}")
                     else:
@@ -300,7 +300,7 @@ class SFTTrainer:
 
                 if self._wandb is not None:
                     logs = {"train/global_step": self.global_step}
-                    for k in self.log_state:
+                    for k in sorted(self.log_state):
                         logs[k] = self.log_state[k]
                     self._wandb.log(logs)
 

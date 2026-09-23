@@ -7,6 +7,7 @@ from kdflow.loss import build_loss_fn
 from kdflow.loss.chunked_loss import chunked_loss
 from kdflow.loss.cross_entropy import compute_cross_entropy
 from kdflow.metrics.entropy import compute_entropy
+from kdflow.metrics.multi_teacher_loss import prepare_multi_teacher_loss_stats
 from kdflow.metrics.rollout_consistency import compute_rollout_consistency
 from kdflow.metrics.topk_token_overlap import compute_topk_token_overlap_ratios
 
@@ -104,17 +105,22 @@ class VanillaKD:
         chunk_size = self.args.train.chunked_loss_size or student_hiddens.shape[0]
 
         if isinstance(self.teacher_lm_head, dict):  # multi-teacher distillation
+            multi_teacher_loss_stats_fn = prepare_multi_teacher_loss_stats(
+                self.teacher_lm_head, micro_batch["teacher_routing_key"], student_loss_mask,
+            )
+            metric_fns = [*metric_fns, multi_teacher_loss_stats_fn]
+
             teacher_logits_fn = lambda start, end: self.compute_multi_teacher_logits(
                 teacher_hiddens, teacher_loss_mask, micro_batch["teacher_routing_key"], start, end
             )
-            kd_loss, metric_sums = chunked_loss(
+            kd_loss, metric_stats = chunked_loss(
                 student_hiddens, self.student.model.lm_head, self.loss_fn,
                 teacher_logits_fn=teacher_logits_fn, chunk_size=chunk_size, reduction="sum",
                 metric_fns=metric_fns, return_metrics=True,
             )
         else:
             teacher_hiddens = teacher_hiddens.to(self.teacher_lm_head.weight)
-            kd_loss, metric_sums = chunked_loss(
+            kd_loss, metric_stats = chunked_loss(
                 student_hiddens, self.student.model.lm_head, self.loss_fn,
                 teacher_hidden=teacher_hiddens, teacher_head=self.teacher_lm_head,
                 chunk_size=chunk_size, reduction="sum",
@@ -122,7 +128,7 @@ class VanillaKD:
             )
         kd_loss = kd_loss / avg_token_num
         loss_info = {"train/loss": kd_loss, "train/kd_loss": kd_loss}
-        loss_info.update({key: value / avg_token_num for key, value in metric_sums.items()})
+        loss_info["metric_stats"] = metric_stats
 
         if self.args.kd.kd_ratio < 1:
             ce_loss = chunked_loss(

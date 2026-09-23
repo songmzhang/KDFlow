@@ -18,6 +18,7 @@ from transformers.trainer import get_scheduler
 from transformers import AutoConfig
 from huggingface_hub import hf_hub_download
 
+from kdflow.metrics import accumulate_metric_stats, average_metric_stats
 from kdflow.models import DistillModel
 from kdflow.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
 from kdflow.utils.logging_utils import init_logger, normalize_eval_metrics
@@ -310,6 +311,7 @@ class StudentRayActor:
         """
         self.student.train()
         status = defaultdict(list)
+        metric_stats = {}
 
         if self.args.train.use_dynamic_bsz:
             self.strategy.accumulated_gradient = len(train_data)
@@ -319,6 +321,7 @@ class StudentRayActor:
             micro_batch = self._prepare_micro_batch(batch)
 
             loss_info = self.kd_algorithm.training_step(micro_batch)
+            accumulate_metric_stats(metric_stats, loss_info.pop("metric_stats", {}))
             for key in loss_info:
                 status[key].append(loss_info[key].item())
             
@@ -357,6 +360,13 @@ class StudentRayActor:
         for key in status:
             status[key] = self.strategy.all_reduce(status[key], op="mean")
         
+        status["metric_stats"] = {
+            key: (
+                self.strategy.all_reduce(float(total), op="sum"),
+                self.strategy.all_reduce(float(count), op="sum"),
+            )
+            for key, (total, count) in sorted(metric_stats.items())
+        }
         # self.empty_cache()
         
         return status
@@ -367,6 +377,7 @@ class StudentRayActor:
         was_training = self.student.training
         self.student.eval()
         metric_sums = defaultdict(float)
+        metric_stats = {}
         num_tokens = 0.0
 
         try:
@@ -377,6 +388,7 @@ class StudentRayActor:
                 micro_batch["avg_micro_batch_token_num"] = max(batch_tokens, 1)
 
                 metrics = self.kd_algorithm.training_step(micro_batch)
+                accumulate_metric_stats(metric_stats, metrics.pop("metric_stats", {}), weight=weight)
                 for key, value in metrics.items():
                     value = value.item() if hasattr(value, "item") else float(value)
                     metric_sums[key] += value * batch_tokens * weight
@@ -390,6 +402,14 @@ class StudentRayActor:
             key: self.strategy.all_reduce(value, op="sum") / max(num_tokens, 1)
             for key, value in metric_sums.items()
         }
+        metric_stats = {
+            key: (
+                self.strategy.all_reduce(float(total), op="sum"),
+                self.strategy.all_reduce(float(count), op="sum"),
+            )
+            for key, (total, count) in sorted(metric_stats.items())
+        }
+        metrics.update(average_metric_stats(metric_stats))
         metrics["eval/num_tokens"] = num_tokens / self.args.model.ring_attn_size
         return normalize_eval_metrics(metrics)
 
