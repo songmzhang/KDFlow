@@ -1,9 +1,9 @@
 import math
 import os
-import socket
 import logging
 import json
 from abc import ABC
+from datetime import timedelta
 from typing import Dict, List, Optional, Union
 from collections import defaultdict
 
@@ -42,7 +42,15 @@ class StudentRayActor:
         self._world_size = world_size
         self._rank = rank
         self._master_addr = master_addr if master_addr else self._get_current_node_ip()
-        self._master_port = master_port if master_port else self._get_free_port()
+        self._store = torch.distributed.TCPStore(
+            host_name=self._master_addr,
+            port=0 if rank == 0 else master_port,
+            world_size=world_size,
+            is_master=(rank == 0),
+            timeout=timedelta(minutes=60),
+            wait_for_workers=False,
+        )
+        self._master_port = self._store.port
         os.environ["MASTER_ADDR"] = self._master_addr
         os.environ["MASTER_PORT"] = str(self._master_port)
         os.environ["WORLD_SIZE"] = str(self._world_size)
@@ -58,13 +66,6 @@ class StudentRayActor:
         address = ray._private.services.get_node_ip_address()
         # strip ipv6 address
         return address.strip("[]")
-
-    @staticmethod
-    def _get_free_port():
-        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as sock:
-            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-            sock.bind(("::", 0))
-            return sock.getsockname()[1]
 
     def get_master_addr_port(self):
         return self._master_addr, self._master_port
@@ -96,7 +97,9 @@ class StudentRayActor:
         self._is_sleeping = False
         self.teacher_state = None
 
-        strategy.setup_distributed()
+        strategy.setup_distributed(
+            store=self._store, rank=self._rank, world_size=self._world_size,
+        )
 
         # Only initialize student model
         self.student = DistillModel(strategy)

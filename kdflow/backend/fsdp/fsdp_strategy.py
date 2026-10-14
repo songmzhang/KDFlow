@@ -66,7 +66,9 @@ class FSDP2Strategy(ABC):
         # Use stacklevel=2 to show the caller's location instead of this function's location
         log_func(full_msg, stacklevel=2)
         
-    def setup_distributed(self, timeout=timedelta(minutes=60)) -> None:
+    def setup_distributed(
+        self, timeout=timedelta(minutes=60), *, store=None, rank=-1, world_size=-1,
+    ) -> None:
         if self.full_determinism:
             transformers.enable_full_determinism(self.seed)
             # Use deterministic backward in flash attention as, by default, flash attention uses atomic adds
@@ -80,7 +82,10 @@ class FSDP2Strategy(ABC):
             torch.cuda.set_device(local_rank)
         
         if not dist.is_initialized():
-            dist.init_process_group(backend="nccl", timeout=timeout)
+            dist.init_process_group(
+                backend="nccl", timeout=timeout,
+                store=store, rank=rank, world_size=world_size,
+            )
             
         self.world_size = dist.get_world_size()
         self.sp_size = self.args.model.ring_attn_size
