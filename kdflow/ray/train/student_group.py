@@ -177,8 +177,8 @@ class StudentActorGroup:
                 refs.append(getattr(actor, actor_method).remote(chunk_ref))
         return refs
     
-    def sleep(self):
-        return ray.get([actor.sleep.remote() for actor in self._actor_handlers])
+    def sleep(self, **kwargs):
+        return ray.get([actor.sleep.remote(**kwargs) for actor in self._actor_handlers])
 
     def wakeup(self):
         return ray.get([actor.wakeup.remote() for actor in self._actor_handlers])

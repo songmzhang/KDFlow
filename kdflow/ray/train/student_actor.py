@@ -455,15 +455,23 @@ class StudentRayActor:
         self.strategy.onload_optim_states(self.optim)
         self._is_sleeping = False
 
-    def sleep(self):
-        """Offload optimizer states from GPU to CPU to save memory."""
-        self.strategy.offload_optim_states(self.optim)
-        if isinstance(self.teacher_lm_head, dict):
-            self.teacher_lm_head = {k: v.cpu() for k, v in self.teacher_lm_head.items()}
-        else:
-            self.teacher_lm_head = self.teacher_lm_head.cpu()
-        self.strategy.offload_model_params(self.student, empty_cache=True)
-        self._is_sleeping = True
+    def sleep(self, tags=["model", "optim", "teacher_lm_head"]):
+        """Offload model parameters, teacher lm_head, and optimizer states to CPU."""
+        if "optim" in tags:
+            self.strategy.offload_optim_states(self.optim, empty_cache=False)
+
+        if "teacher_lm_head" in tags:
+            if isinstance(self.teacher_lm_head, dict):
+                self.teacher_lm_head = {k: v.cpu() for k, v in self.teacher_lm_head.items()}
+            else:
+                self.teacher_lm_head = self.teacher_lm_head.cpu()
+
+        if "model" in tags:
+            self.strategy.offload_model_params(self.student, empty_cache=False)
+            self._is_sleeping = True
+
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
 
     def save_model(self, save_path):
         """Export the HF model or adapter."""

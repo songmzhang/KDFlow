@@ -143,6 +143,7 @@ class OnPolicyKDTrainer:
 
     def _sync_rollout_policy(self):
         if self.args.train.enable_sleep:
+            self.student.sleep(tags=["optim", "teacher_lm_head"])
             self.rollout_group.wakeup(tags=["weights"])
         try:
             if self.use_lora:
