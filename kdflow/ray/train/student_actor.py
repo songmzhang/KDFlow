@@ -13,6 +13,7 @@ import torch
 import torch.nn as nn
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
+from torch.distributed.tensor import DTensor
 from tqdm import tqdm
 from transformers.trainer import get_scheduler
 from transformers import AutoConfig
@@ -579,3 +580,18 @@ class StudentRayActor:
             gather_group=self._ipc_gather_group_for_teacher,
             weight_source=weight_source,
         )
+        # update teacher_lm_head in StudentRayActor
+        model = self.strategy._unwrap_model(model)
+        output_head = model.get_output_embeddings()
+        parameter_names = {id(param): name for name, param in model.named_parameters()}
+        target = self.teacher_lm_head.weight
+        param = output_head.weight
+        # if tied_embeddings is True, `name` will be `model.embed_tokens.weight`.
+        name = parameter_names[id(param)]
+        if weight_source is not None and name in weight_source:
+            param = weight_source[name]
+        param = param.detach().cuda()
+        if isinstance(param, DTensor):
+            param = param.full_tensor()
+        target.copy_(param.to(device=target.device, dtype=target.dtype))
+        del param
