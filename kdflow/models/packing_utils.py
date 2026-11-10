@@ -56,7 +56,10 @@ def prepare_packed_inputs(
         model = model.get_base_model()
     batch, seqlen = sequences.shape
     multimodal_positions = None
-    if hasattr(model.config, "vision_config"):
+    if hasattr(model.config, "vision_config") and (
+        model_kwargs.get("image_grid_thw") is not None
+        or model_kwargs.get("video_grid_thw") is not None
+    ):
         get_rope_index = getattr(model.base_model, "get_rope_index", None)
         if get_rope_index is None:
             raise ValueError(
