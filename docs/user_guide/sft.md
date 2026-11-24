@@ -2,13 +2,16 @@
 
 SFT can be also regarded as KDFlow's **black-box KD** mode — the teacher's knowledge is encoded
 in the dataset (e.g. distilled responses). It uses the same dataset / packing /
-FSDP2 / LoRA / Liger Kernel infrastructure as the KD trainers, but **without
-Ray** and without a teacher actor group. The training loop is started with a standard `torchrun`.
+FSDP2 / LoRA / Liger Kernel infrastructure as the KD trainers, and is launched
+through Ray in the same way, but only spawns a `StudentActorGroup` (no teacher or
+rollout actors).
 
 ## Entry point
 
 ```bash
-torchrun --nproc_per_node=8 -m kdflow.cli.train_sft [args...]
+ray start --head --node-ip-address 0.0.0.0 --num-gpus 8
+
+python -m kdflow.cli.train_sft [args...]
 ```
 
 ## Example
@@ -20,7 +23,7 @@ bash examples/sft/run_qwen3_4b.sh
 which runs:
 
 ```bash
-torchrun --nproc_per_node=8 -m kdflow.cli.train_sft \
+python -m kdflow.cli.train_sft \
     --num_nodes 1  --num_gpus_per_node 8 \
     --backend fsdp2 \
     --train_batch_size 128  --micro_train_batch_size 2 \
@@ -40,7 +43,7 @@ torchrun --nproc_per_node=8 -m kdflow.cli.train_sft \
   it with a smaller student.
 - You need a **starting checkpoint** before running on-policy KD.
 - You want to fine-tune a model with the same FSDP2 / LoRA / packing
-  infrastructure used by the KD trainers, without spinning up Ray and SGLang.
+  infrastructure used by the KD trainers, without spinning up SGLang engines.
 
 ## Argument groups
 

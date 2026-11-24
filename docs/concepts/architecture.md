@@ -64,7 +64,7 @@ balanced when sequence lengths vary widely (typical of chat datasets).
 
 | Trainer                | Driven by                              | Used for                |
 |------------------------|----------------------------------------|--------------------------|
-| `SFTTrainer`           | `kdflow.cli.train_sft` (`torchrun`)    | Plain SFT, no Ray        |
+| `SFTTrainer`           | `kdflow.cli.train_sft`                 | Plain SFT, no teacher    |
 | `OffPolicyKDTrainer`   | `kdflow.cli.train_kd_off_policy`       | Off-policy KD (CT-KD too)|
 | `OnPolicyKDTrainer`    | `kdflow.cli.train_kd_on_policy`        | On-policy KD (CT-KD too) |
 

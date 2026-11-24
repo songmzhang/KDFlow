@@ -1,12 +1,12 @@
 # CLI Entry Points
 
 KDFlow does not register any console scripts. All training is launched via
-`python -m kdflow.cli.<entry>` (or `torchrun -m kdflow.cli.<entry>` for SFT).
+`python -m kdflow.cli.<entry>` on top of a running Ray cluster.
 Three entry points are provided:
 
 | Module                              | Launcher  | Scenario   | Trainer               | Actor groups spawned                                              |
 |-------------------------------------|-----------|------------|------------------------|-------------------------------------------------------------------|
-| `kdflow.cli.train_sft`              | `torchrun`| `sft`      | `SFTTrainer`           | None (single-controller, no Ray)                                  |
+| `kdflow.cli.train_sft`              | `python`  | `sft`      | `SFTTrainer`           | `StudentActorGroup`                                               |
 | `kdflow.cli.train_kd_off_policy`    | `python`  | off-policy | `OffPolicyKDTrainer`   | `TeacherActorGroup`, `StudentActorGroup`                          |
 | `kdflow.cli.train_kd_on_policy`     | `python`  | on-policy  | `OnPolicyKDTrainer`    | `TeacherActorGroup`, `StudentActorGroup`, `RolloutActorGroup`     |
 
@@ -19,10 +19,14 @@ to the corresponding trainer.
 ## `kdflow.cli.train_sft`
 
 Standard supervised fine-tuning. Uses FSDP2 + the same dataset / packing /
-LoRA / Liger Kernel infrastructure as the KD trainers, but **no Ray**.
+LoRA / Liger Kernel infrastructure as the KD trainers, with only a student
+actor group (no teacher).
 
 ```bash
-torchrun --nproc_per_node=8 -m kdflow.cli.train_sft \
+ray start --head --node-ip-address 0.0.0.0 --num-gpus 8
+
+python -m kdflow.cli.train_sft \
+    --num_nodes 1 --num_gpus_per_node 8 \
     --student_name_or_path Qwen3/Qwen3-4B \
     --train_dataset_path OpenLeecher/lmsys_chat_1m_clean \
     --train_batch_size 128 --micro_train_batch_size 2 \
@@ -30,8 +34,8 @@ torchrun --nproc_per_node=8 -m kdflow.cli.train_sft \
     --gradient_checkpointing True
 ```
 
-For multi-node SFT, use `torchrun` with `--nnodes` / `--node_rank` /
-`--rdzv_*` flags as usual.
+For multi-node SFT, join the worker nodes to the Ray cluster and set
+`--num_nodes` / `--num_gpus_per_node` accordingly, same as the KD entry points.
 
 ---
 

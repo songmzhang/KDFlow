@@ -6,9 +6,9 @@ For the full set of supported scenarios, see the [User Guide](../user_guide/off_
 
 ## 1. Start a Ray cluster
 
-The KD entry points (`train_kd_off_policy`, `train_kd_on_policy`) drive a
-controller that orchestrates Ray actors — so Ray must be running before you
-launch the script:
+All entry points (`train_sft`, `train_kd_off_policy`, `train_kd_on_policy`)
+drive a controller that orchestrates Ray actors — so Ray must be running before
+you launch the script:
 
 ```bash
 ray start --head --node-ip-address 0.0.0.0 --num-gpus 8
@@ -16,10 +16,6 @@ ray start --head --node-ip-address 0.0.0.0 --num-gpus 8
 
 For multi-node training, start the head on node 0 and `ray start --address ...`
 on workers; KDFlow auto-discovers GPUs from the cluster.
-
-!!! tip "SFT does not need Ray"
-    [Supervised Fine-Tuning](../user_guide/sft.md) uses a single-controller
-    `torchrun` flow (no Ray) and skips this step entirely.
 
 ## 2. Pick a recipe
 
@@ -128,7 +124,7 @@ Key flags:
 
 See [Multi-Teacher KD](../user_guide/multi_teacher_kd.md) for details.
 
-## 6. Run SFT (no Ray)
+## 6. Run SFT
 
 ```bash
 bash examples/sft/run_qwen3_4b.sh
@@ -137,7 +133,7 @@ bash examples/sft/run_qwen3_4b.sh
 which runs:
 
 ```bash
-torchrun --nproc_per_node=8 -m kdflow.cli.train_sft \
+python -m kdflow.cli.train_sft \
     --student_name_or_path Qwen3/Qwen3-4B \
     --train_dataset_path OpenLeecher/lmsys_chat_1m_clean \
     --train_batch_size 128 --micro_train_batch_size 2 \

@@ -1,6 +1,9 @@
 set -e
 set -x
 
+# Start ray before first running
+# ray start --head --node-ip-address 0.0.0.0 --num-gpus 8
+
 # ============ TrainingArguments ============
 OPTS=""
 OPTS+=" --num_nodes 1"
@@ -14,7 +17,7 @@ OPTS+=" --num_epochs 1"
 OPTS+=" --save_path ./output/qwen3_4b"
 OPTS+=" --bf16 True"
 OPTS+=" --gradient_checkpointing True"
-OPTS+=" --train_enable_sleep False"
+OPTS+=" --enable_sleep False"
 
 # ============ ModelArguments ============
 OPTS+=" --student_name_or_path Qwen3/Qwen3-4B"
@@ -32,9 +35,9 @@ OPTS+=" --packing_samples True"
 OPTS+=" --logging_steps 10"
 OPTS+=" --use_wandb True"
 OPTS+=" --wandb_project KDFlow"
-OPTS+=" --wandb_group off_policy_kd"
+OPTS+=" --wandb_group sft"
 OPTS+=" --wandb_run_name qwen3_4b_sft"
 OPTS+=" --wandb_mode offline"
 OPTS+=" --wandb_dir ./output"
 
-torchrun --nproc_per_node=8 -m kdflow.cli.train_sft $OPTS
+python -m kdflow.cli.train_sft $OPTS
