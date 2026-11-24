@@ -8,7 +8,6 @@ from kdflow.ray.placement_group import create_placement_group
 from kdflow.trainer.sft_trainer import SFTTrainer
 from kdflow.datasets import SFTDataset
 from kdflow.datasets.utils import blending_datasets
-from kdflow.models.utils import check_tokenizer_identical, TokenizerCompareResult
 from kdflow.backend import get_strategy
 from kdflow.arguments import init_args
 from kdflow.utils.distributed_sampler import DistributedSampler
@@ -40,7 +39,7 @@ def train(args):
         args,
         args.train.num_nodes,
         args.train.num_gpus_per_node,
-        pg=pg,
+        pg=(pg, reordered_bundle_indices),
         num_gpus_per_actor=0.01,
     )
     
