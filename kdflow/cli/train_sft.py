@@ -1,110 +1,37 @@
-import os
 import math
 
 import ray
 
-from kdflow.ray.train.student_group import StudentActorGroup
+from kdflow.cli.common import init_ray, build_student_group, build_dataloaders
 from kdflow.ray.placement_group import create_placement_group
 from kdflow.trainer.sft_trainer import SFTTrainer
 from kdflow.datasets import SFTDataset
-from kdflow.datasets.utils import blending_datasets
 from kdflow.backend import get_strategy
 from kdflow.arguments import init_args
-from kdflow.utils.distributed_sampler import DistributedSampler
-from kdflow.utils.utils import get_tokenizer
 
 
 def train(args):
-    # Initialize Ray if not already initialized
-    if not ray.is_initialized():
-        ray.init(
-            runtime_env={
-                "env_vars": {
-                    "TOKENIZERS_PARALLELISM": "true",
-                    "NCCL_DEBUG": "WARN"
-                },
-                "working_dir": os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            }
-        )
+    init_ray()
     
     strategy = get_strategy(args)
     strategy.print(args)
     
     # Create placement group for resource allocation
     num_gpus = args.train.num_nodes * args.train.num_gpus_per_node
-    pg, reordered_bundle_indices, reordered_gpu_ids = create_placement_group(num_gpus)
+    pg_info = create_placement_group(num_gpus)
     strategy.print(f"Placement group ready with {num_gpus} GPUs")
     
-    student_model = StudentActorGroup(
-        args,
-        args.train.num_nodes,
-        args.train.num_gpus_per_node,
-        pg=(pg, reordered_bundle_indices),
-        num_gpus_per_actor=0.01,
-    )
+    student_model = build_student_group(args, pg_info)
     
-    # Initialize tokenizers
-    student_tokenizer = get_tokenizer(
-        args.model.student_name_or_path,
-        use_fast=not args.model.disable_fast_tokenizer
-    )
-    
-    # Load and prepare training dataset
-    train_data = blending_datasets(
-        args.data.train_dataset_path,
-        args.data.train_dataset_probs,
-        strategy,
-        args.train.seed,
-        max_count=args.data.max_samples,
-        dataset_split=args.data.train_split,
-    )
-    train_data = train_data.select(range(min(args.data.max_samples, len(train_data))))
-    
-    train_dataset = SFTDataset(
-        train_data,
-        strategy,
-        max_data_num=args.data.max_samples,
-        input_template=args.data.input_template,
-        num_processors=args.data.preprocess_num_workers,
-    )
-    
-    sampler = DistributedSampler(train_dataset, num_replicas=1, rank=0, shuffle=True, seed=args.train.seed, drop_last=True)
-    train_dataloader = strategy.setup_dataloader(
-        train_dataset,
-        args.train.micro_train_batch_size,
+    train_dataloader, eval_dataloader = build_dataloaders(
+        args, strategy, SFTDataset,
+        batch_size=args.train.micro_train_batch_size,
+        eval_batch_size=1,
         pin_memory=False,
-        shuffle=False,
-        collate_fn=train_dataset.collate_fn,
-        sampler=sampler,
     )
-    
-    # Load and prepare evaluation dataset (optional)
-    eval_dataloader = None
-    if getattr(args.data, "eval_dataset_path", None):
-        eval_data = blending_datasets(
-            args.data.eval_dataset_path,
-            None,
-            strategy,
-            dataset_split=args.data.eval_split,
-        )
-        eval_data = eval_data.select(range(min(args.data.max_samples, len(eval_data))))
-        eval_dataset = SFTDataset(
-            eval_data,
-            strategy,
-            input_template=args.data.input_template,
-            num_processors=args.data.preprocess_num_workers,
-        )
-        eval_dataloader = strategy.setup_dataloader(
-            eval_dataset,
-            batch_size=1,
-            pin_memory=True,
-            shuffle=False,
-            drop_last=False,
-            collate_fn=eval_dataset.collate_fn,
-        )
     
     # Calculate max training steps
-    num_update_steps_per_epoch = len(train_dataset) // args.train.train_batch_size
+    num_update_steps_per_epoch = len(train_dataloader.dataset) // args.train.train_batch_size
     max_steps = math.ceil(args.train.num_epochs * num_update_steps_per_epoch)
     strategy.log(f"Max training steps: {max_steps}")
     
