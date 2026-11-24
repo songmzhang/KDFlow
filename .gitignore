@@ -12,3 +12,4 @@ eggs/
 *.whl
 
 site/
+wandb/
