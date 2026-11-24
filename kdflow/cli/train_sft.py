@@ -1,33 +1,56 @@
+import os
 import math
-from transformers.trainer import get_scheduler
 
-from kdflow.arguments import init_args
-from kdflow.datasets.utils import blending_datasets
-from kdflow.models.model import DistillModel
-from kdflow.datasets import SFTDataset
+import ray
+
+from kdflow.ray.train.student_group import StudentActorGroup
+from kdflow.ray.placement_group import create_placement_group
 from kdflow.trainer.sft_trainer import SFTTrainer
+from kdflow.datasets import SFTDataset
+from kdflow.datasets.utils import blending_datasets
+from kdflow.models.utils import check_tokenizer_identical, TokenizerCompareResult
 from kdflow.backend import get_strategy
+from kdflow.arguments import init_args
+from kdflow.utils.distributed_sampler import DistributedSampler
+from kdflow.utils.utils import get_tokenizer
 
 
 def train(args):
+    # Initialize Ray if not already initialized
+    if not ray.is_initialized():
+        ray.init(
+            runtime_env={
+                "env_vars": {
+                    "TOKENIZERS_PARALLELISM": "true",
+                    "NCCL_DEBUG": "WARN"
+                },
+                "working_dir": os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            }
+        )
+    
     strategy = get_strategy(args)
-    strategy.setup_distributed()
+    strategy.print(args)
     
-    # load student model
-    student = DistillModel(strategy)
+    # Create placement group for resource allocation
+    num_gpus = args.train.num_nodes * args.train.num_gpus_per_node
+    pg, reordered_bundle_indices, reordered_gpu_ids = create_placement_group(num_gpus)
+    strategy.print(f"Placement group ready with {num_gpus} GPUs")
     
-    # bf16 mixed precision training in fsdp
-    if args.train.bf16:
-        student = student.float()   # cast student to fp32 for mixed precision training in fsdp
-    student = strategy.prepare(student)
-
-    optim = strategy.create_optimizer(
-        student, 
-        lr=args.train.learning_rate, 
-        betas=args.train.adam_betas, 
-        weight_decay=args.train.weight_decay
+    student_model = StudentActorGroup(
+        args,
+        args.train.num_nodes,
+        args.train.num_gpus_per_node,
+        pg=pg,
+        num_gpus_per_actor=0.01,
     )
     
+    # Initialize tokenizers
+    student_tokenizer = get_tokenizer(
+        args.model.student_name_or_path,
+        use_fast=not args.model.disable_fast_tokenizer
+    )
+    
+    # Load and prepare training dataset
     train_data = blending_datasets(
         args.data.train_dataset_path,
         args.data.train_dataset_probs,
@@ -37,24 +60,31 @@ def train(args):
         dataset_split=args.data.train_split,
     )
     train_data = train_data.select(range(min(args.data.max_samples, len(train_data))))
+    
     train_dataset = SFTDataset(
-        train_data, 
-        strategy, 
+        train_data,
+        strategy,
         max_data_num=args.data.max_samples,
         input_template=args.data.input_template,
+        num_processors=args.data.preprocess_num_workers,
     )
+    
+    sampler = DistributedSampler(train_dataset, num_replicas=1, rank=0, shuffle=True, seed=args.train.seed, drop_last=True)
     train_dataloader = strategy.setup_dataloader(
         train_dataset,
         args.train.micro_train_batch_size,
-        pin_memory=True,
-        shuffle=True,
-        collate_fn=train_dataset.collate_fn
+        pin_memory=False,
+        shuffle=False,
+        collate_fn=train_dataset.collate_fn,
+        sampler=sampler,
     )
-
+    
+    # Load and prepare evaluation dataset (optional)
+    eval_dataloader = None
     if getattr(args.data, "eval_dataset_path", None):
         eval_data = blending_datasets(
             args.data.eval_dataset_path,
-            None,  # No probability sampling for eval datasets
+            None,
             strategy,
             dataset_split=args.data.eval_split,
         )
@@ -62,7 +92,6 @@ def train(args):
         eval_dataset = SFTDataset(
             eval_data,
             strategy,
-            max_data_num=args.data.max_samples,
             input_template=args.data.input_template,
             num_processors=args.data.preprocess_num_workers,
         )
@@ -74,39 +103,29 @@ def train(args):
             drop_last=False,
             collate_fn=eval_dataset.collate_fn,
         )
-    else:
-        eval_dataloader = None
-
-    # scheduler
+    
+    # Calculate max training steps
     num_update_steps_per_epoch = len(train_dataset) // args.train.train_batch_size
     max_steps = math.ceil(args.train.num_epochs * num_update_steps_per_epoch)
-
-    scheduler = get_scheduler(
-        args.train.lr_scheduler,
-        optim,
-        num_warmup_steps=math.ceil(max_steps * args.train.lr_warmup_ratio),
-        num_training_steps=max_steps,
-        scheduler_specific_kwargs={"min_lr": args.train.min_lr},
-    )
-
-    # gradient_checkpointing
-    if args.train.gradient_checkpointing:
-        student.gradient_checkpointing_enable()
+    strategy.log(f"Max training steps: {max_steps}")
     
-    # configure Trainer
+    # Initialize student model on all workers
+    ray.get(student_model.async_init_model_from_pretrained(strategy, max_steps))
+    
+    strategy.log("Models initialized on all student actors")
+    
+    # Initialize SFTTrainer (Single controller)
     trainer = SFTTrainer(
-        args,
-        strategy,
-        student_model=student,
+        strategy=strategy,
+        student_model=student_model,
         train_dataloader=train_dataloader,
         eval_dataloader=eval_dataloader,
-        scheduler=scheduler,
-        optimizer=optim,
+        max_steps=max_steps,
         num_update_steps_per_epoch=num_update_steps_per_epoch,
     )
-
+    
     trainer.fit()
-    strategy.save_model(student, args.ckpt.save_path)
+    ray.get(student_model.async_save_model(args.ckpt.save_path))
     strategy.log("Training completed.")
 
 

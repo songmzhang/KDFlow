@@ -141,12 +141,15 @@ class StudentRayActor:
                 key: self.load_only_lm_head(self.args.kd.multi_teacher_config[key])
                 for key in self.args.kd.multi_teacher_config
             }
+        elif self.args.model.teacher_name_or_path:
+            self.teacher_lm_head = self.load_only_lm_head(self.args.model.teacher_name_or_path)
         else:
-            self.teacher_lm_head = self.load_only_lm_head(strategy.args.model.teacher_name_or_path)
+            self.teacher_lm_head = None
 
         # Initialize KD algorithm without teacher model
         # Teacher hiddens will be passed in each micro_batch during training
-        ALGO_CLS = ALGO_DICT[self.args.kd.kd_algorithm]
+        algorithm = "sft" if self.args.scenario == "sft" else self.args.kd.kd_algorithm
+        ALGO_CLS = ALGO_DICT[algorithm]
         self.kd_algorithm = ALGO_CLS(
             strategy=strategy, 
             student_model=self.student,
@@ -426,10 +429,10 @@ class StudentRayActor:
             optimizer=self.optim,
             scheduler=self.scheduler,
         )
-        extra_state = state.pop("extra_state")
+        extra_state = state.pop("extra_state") or {}
         model_state = self.student.model.state_dict()
         for key in ("ema_state", "teacher_state"):
-            weights = extra_state[key]
+            weights = extra_state.get(key)
             if weights is not None:
                 for name, value in weights.items():
                     param = model_state[name]
@@ -451,7 +454,7 @@ class StudentRayActor:
         self.strategy.onload_model_params(self.student)
         if isinstance(self.teacher_lm_head, dict):
             self.teacher_lm_head = {k: v.cuda() for k, v in self.teacher_lm_head.items()}
-        else:
+        elif isinstance(self.teacher_lm_head, torch.nn.Module):
             self.teacher_lm_head = self.teacher_lm_head.cuda()
         self.strategy.onload_optim_states(self.optim)
         self._is_sleeping = False
@@ -464,7 +467,7 @@ class StudentRayActor:
         if "teacher_lm_head" in tags:
             if isinstance(self.teacher_lm_head, dict):
                 self.teacher_lm_head = {k: v.cpu() for k, v in self.teacher_lm_head.items()}
-            else:
+            elif isinstance(self.teacher_lm_head, torch.nn.Module):
                 self.teacher_lm_head = self.teacher_lm_head.cpu()
 
         if "model" in tags:

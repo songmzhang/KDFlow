@@ -10,6 +10,16 @@ from kdflow.utils.logging_utils import init_logger
 logger = init_logger(__name__)
 
 
+def compute_token_lengths(processor, texts, *, add_special_tokens):
+    """Compute token lengths in a batch without padding or truncation."""
+    tokenizer = getattr(processor, "tokenizer", processor)
+    encoded = tokenizer(
+        texts, add_special_tokens=add_special_tokens, padding=False, truncation=False,
+        return_attention_mask=False, return_token_type_ids=False,
+    )
+    return [len(ids) for ids in encoded["input_ids"]]
+
+
 def validate_dataset_columns(dataset, **column_settings):
     """Validate that configured dataset keys exist in the source dataset."""
     available_columns = list(dataset.column_names)

@@ -3,6 +3,7 @@ from typing import Optional, Dict, Any, List
 from torch.utils.data import Dataset
 
 from kdflow.datasets.utils import (
+    compute_token_lengths,
     convert_to_openai_messages,
     get_tokenizer_or_processor,
     validate_dataset_columns,
@@ -159,12 +160,9 @@ class PromptDataset(Dataset):
 
     def _compute_prompt_lengths(self, prompts: List[str]) -> Dict[str, List[int]]:
         """Compute the prompt_len column with batch-level tokenization."""
-        tokenizer = getattr(self.student_processor, "tokenizer", self.student_processor)
-        encoded = tokenizer(
-            prompts, add_special_tokens=True, padding=False, truncation=False,
-            return_attention_mask=False, return_token_type_ids=False,
-        )
-        return {"prompt_len": [len(input_ids) for input_ids in encoded["input_ids"]]}
+        return {"prompt_len": compute_token_lengths(
+            self.student_processor, prompts, add_special_tokens=False,
+        )}
 
     def _build_prompt(self, data: Dict, processor_or_tokenizer, input_key: str) -> str:
         """Build prompt from data with optional chat template or input template.

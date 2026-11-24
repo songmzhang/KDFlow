@@ -1,60 +1,54 @@
-import math
 import time
-import torch
-import numpy as np
-import torch.distributed as dist
-
-from datetime import timedelta
-from typing import Optional
 from collections import defaultdict
+from datetime import timedelta
 
-from kdflow.algorithms.sft import SFT
-from kdflow.utils.logging_utils import (
-    define_wandb_metrics,
-    init_logger,
-    log_eval_metrics,
-)
-from kdflow.utils.dynamic_bsz import rearrange_global_batch
+import ray
+
 from kdflow.backend.fsdp.checkpoint import resolve_resume_checkpoint
+from kdflow.utils.dynamic_bsz import rearrange_global_batch
+from kdflow.utils.logging_utils import define_wandb_metrics, init_logger, log_eval_metrics
+from kdflow.metrics import accumulate_metric_stats, average_metric_stats
 
 
 logger = init_logger(__name__)
 
 
 class SFTTrainer:
+    """Single-controller SFT trainer backed by StudentActorGroup."""
+
     def __init__(
-        self, 
-        args, 
+        self,
         strategy,
         student_model,
         train_dataloader,
         eval_dataloader=None,
-        scheduler=None,
-        optimizer=None,
-        num_update_steps_per_epoch=None
+        max_steps: int = None,
+        num_update_steps_per_epoch: int = None,
     ) -> None:
-        self.args = args
         self.strategy = strategy
+        self.args = strategy.args
         self.student = student_model
         self.train_dataloader = train_dataloader
         self.eval_dataloader = eval_dataloader
-        self.optimizer = optimizer
-        self.scheduler = scheduler
         self.num_update_steps_per_epoch = num_update_steps_per_epoch
-        self.epochs = args.train.num_epochs
-        
-        self.dp_group = strategy.sp_mesh['dp'].get_group()
-        
-        self.kd_algorithm = SFT(strategy=strategy, student_model=self.student)
-        
+        self.epochs = self.args.train.num_epochs
+        self.max_steps = max_steps
+        self.world_size = self.args.train.num_nodes * self.args.train.num_gpus_per_node
+        self.dp_size = self.world_size // self.args.model.ring_attn_size
+        if self.world_size % self.args.model.ring_attn_size:
+            raise ValueError("The number of GPUs must be divisible by ring_attn_size.")
+        if self.args.train.train_batch_size % (self.args.train.micro_train_batch_size * self.dp_size):
+            raise ValueError("train_batch_size must be divisible by micro_train_batch_size * DP size.")
+
         self.log_state = defaultdict(list)
-        
+        self.metric_stats = {}
         self._init_loggers()
-    
+
     def _init_loggers(self) -> None:
         """Initialize wandb loggers."""
         self._wandb = None
-        if self.args.log.use_wandb and dist.get_rank() == 0:
+
+        if self.args.log.use_wandb:
             import wandb
 
             if self.args.log.sync_swanlab:
@@ -69,14 +63,14 @@ class SFTTrainer:
                 project=self.args.log.wandb_project,
                 group=self.args.log.wandb_group,
                 name=self.args.log.wandb_run_name,
-                config=self.args.log.__dict__,
+                config=vars(self.args),
                 reinit=True,
                 mode=self.args.log.wandb_mode,
                 dir=self.args.log.wandb_dir,
             )
 
             define_wandb_metrics(wandb)
-    
+
     def _print_training_config(self) -> None:
         """Log training configuration before training starts."""
         total_steps = self.num_update_steps_per_epoch * self.epochs
@@ -85,10 +79,10 @@ class SFTTrainer:
             // (self.args.train.micro_train_batch_size * self.args.train.num_nodes * self.args.train.num_gpus_per_node)
 
         def log_config(name, value):
-            self.strategy.log(f"  {name:<32} {value}")
-        
-        self.strategy.log("******* Start Training *******")
-        log_config("Num GPUs:", dist.get_world_size())
+            logger.info(f"  {name:<32} {value}")
+
+        logger.info("******* Start Training *******")
+        log_config("Num GPUs:", self.world_size)
         log_config("Num Data:", num_data)
         log_config("Num Epochs:", self.epochs)
         log_config("Train Batch Size:", self.args.train.train_batch_size)
@@ -102,7 +96,7 @@ class SFTTrainer:
             log_config("Per-device Batch Size:", self.args.train.micro_train_batch_size)
             log_config("Gradient Accumulation:", grad_accum)
         log_config("Learning Rate:", self.args.train.learning_rate)
-    
+
     def fit(self):
         self.global_step, start_epoch = 0, 0
         checkpoint_path = resolve_resume_checkpoint(
@@ -110,21 +104,18 @@ class SFTTrainer:
         )
         if checkpoint_path is not None:
             self.strategy.log(f"Resuming training from {checkpoint_path}")
-            state = self.strategy.load_checkpoint(
-                self.student, checkpoint_path, optimizer=self.optimizer, scheduler=self.scheduler,
-            )
+            state = self.student.load_checkpoint(checkpoint_path)
             self.global_step = state["global_step"]
             start_epoch = state["epoch"] if state["epoch_end"] else state["epoch"] - 1
             if not state["epoch_end"]:
                 self.train_dataloader.sampler.set_epoch(start_epoch)
                 self.train_dataloader.load_state_dict(state["trainer_state"]["data_loader_state_dict"])
-        
-        # Print training configuration
+
         self._print_training_config()
-        
         self.start_global_step = self.global_step
         self.start_time = time.time()
-        num_micro_batches = self.strategy.accumulated_gradient
+        num_micro_batches = self.args.train.train_batch_size // self.args.train.micro_train_batch_size
+
         if self.eval_dataloader is not None and self.args.train.eval_steps < float("inf") and self.global_step == 0:
             self.strategy.log(f"Start evaluating at global step {self.global_step}")
             self.evaluate()
@@ -132,63 +123,50 @@ class SFTTrainer:
         for epoch in range(start_epoch, self.epochs):
             self.current_epoch = epoch
             self.train_dataloader.sampler.set_epoch(epoch)
-            self.student.train()
-            
             data_iter = iter(self.train_dataloader)
-            self.optimizer.zero_grad(set_to_none=True)
-            # train a global step
             while True:
                 step_start = time.time()
-                global_batch, global_batch_token_num = [], 0
+                global_batch = []
                 try:
                     for _ in range(num_micro_batches):
                         micro_batch = next(data_iter)
                         global_batch.append(micro_batch)
-                        global_batch_token_num += micro_batch["stu_loss_mask"].sum()
                 except StopIteration:
                     break
-                
+
                 if self.args.train.use_dynamic_bsz:
                     global_batch = rearrange_global_batch(
                         global_batch,
                         max_token_len=self.args.train.max_token_len_per_gpu,
-                        dp_group=self.dp_group,
+                        dp_size=self.dp_size,
                     )
-                    self.strategy.accumulated_gradient = len(global_batch)
-                    self.strategy.grad_accum_step = 0
-                
-                micro_batch_tokens = [mb["stu_attn_mask"].sum().item() for mb in global_batch]
-                token_stats = torch.tensor(
-                    [sum(micro_batch_tokens), len(micro_batch_tokens)],
-                    dtype=torch.float64, device=torch.cuda.current_device(),
-                )
-                max_tokens = token_stats.new_tensor(max(micro_batch_tokens))
-                dist.all_reduce(token_stats, op=dist.ReduceOp.SUM, group=self.dp_group)
-                dist.all_reduce(max_tokens, op=dist.ReduceOp.MAX, group=self.dp_group)
-                imbalance = (max_tokens / (token_stats[0] / token_stats[1])).item()
-                self.log_state["train/micro_batch_token_imbalance"].append(imbalance)
+                if len(global_batch) % self.dp_size:
+                    raise ValueError("The number of micro-batches must be divisible by DP size.")
+                global_batch_token_num = sum(mb["stu_loss_mask"].sum() for mb in global_batch)
+                if global_batch_token_num == 0:
+                    raise ValueError("The global batch has no supervised tokens.")
+                avg_micro_batch_token_num = global_batch_token_num / len(global_batch)
+                for mb in global_batch:
+                    mb["avg_micro_batch_token_num"] = avg_micro_batch_token_num
 
-                global_batch_token_num = global_batch_token_num.to(torch.cuda.current_device())
-                dist.all_reduce(global_batch_token_num, op=dist.ReduceOp.SUM)
-                avg_micro_batch_token_num = global_batch_token_num / (len(global_batch) * dist.get_world_size())
-                
+                micro_batch_tokens = [mb["stu_attn_mask"].sum().item() for mb in global_batch]
+                mean_tokens = sum(micro_batch_tokens) / len(micro_batch_tokens)
+                self.log_state["train/micro_batch_token_imbalance"].append(max(micro_batch_tokens) / mean_tokens)
+                if self.args.train.enable_sleep:
+                    self.student.wakeup()
+                student_start = time.time()
                 self.global_step += 1
-                for micro_step, micro_batch in enumerate(global_batch):
-                    for key in micro_batch:
-                        micro_batch[key] = micro_batch[key].to(torch.cuda.current_device())
-                    micro_batch["avg_micro_batch_token_num"] = avg_micro_batch_token_num
-                    
-                    status = self.kd_algorithm.training_step(micro_batch)
-                    loss = status["train/loss"]
-                    self.strategy.backward(loss, self.student, self.optimizer)
-                    status["train/grad_norm"] = torch.nn.utils.clip_grad_norm_(
-                        self.student.parameters(), max_norm=float("inf")).item()
-                    self.strategy.optimizer_step(self.optimizer, self.student, self.scheduler)
-                    
-                    status["train/lr"] = self.scheduler.get_last_lr()[0]
-                    if micro_step + 1 == len(global_batch):
-                        status["timing/step_time"] = time.time() - step_start
-                    self.logging(micro_step, status)
+                status_list = ray.get(self.student.async_run_distill(global_batch))
+                student_step_train_time = time.time() - student_start
+                accumulate_metric_stats(self.metric_stats, status_list[0].pop("metric_stats", {}))
+                for k in status_list[0].keys():
+                    self.log_state[k].append(sum(s[k] for s in status_list) / len(status_list))
+                self.log_state["timing/student_train"].append(student_step_train_time)
+                self.log_state["timing/step_time"].append(time.time() - step_start)
+                self.logging()
+
+                if self.args.train.enable_sleep:
+                    self.student.sleep()
 
                 if (
                     self.eval_dataloader is not None
@@ -196,7 +174,6 @@ class SFTTrainer:
                 ):
                     self.strategy.log(f"Start evaluating at global step {self.global_step}")
                     self.evaluate()
-                
                 if (
                     self.global_step % self.args.ckpt.save_steps == 0
                     and self.global_step < (epoch + 1) * self.num_update_steps_per_epoch
@@ -207,8 +184,7 @@ class SFTTrainer:
 
         total_time = time.time() - self.start_time
         self.strategy.log(f"Training done, totally cost {str(timedelta(seconds=total_time)).split('.')[0]}")
-
-        if self._wandb is not None and dist.get_rank() == 0:
+        if self._wandb is not None:
             self._wandb.finish()
 
     def save_checkpoint(self, epoch_end=False):
@@ -216,56 +192,32 @@ class SFTTrainer:
         trainer_state = None
         if self.args.ckpt.save_training_state:
             trainer_state = {"data_loader_state_dict": self.train_dataloader.state_dict()}
-        return self.strategy.save_checkpoint(
-            self.student, self.current_epoch + 1, self.global_step, epoch_end=epoch_end,
-            optimizer=self.optimizer, scheduler=self.scheduler, trainer_state=trainer_state,
-        )
+        return ray.get(self.student.async_save_checkpoint(
+            self.current_epoch + 1, self.global_step, epoch_end=epoch_end, trainer_state=trainer_state,
+        ))
 
-    @torch.no_grad()
     def evaluate(self):
-        """Evaluate SFT loss on the validation set."""
-        was_training = self.student.training
-        self.student.eval()
-        metric_sums = defaultdict(float)
-        num_tokens = 0.0
-
-        try:
-            for micro_batch in self.eval_dataloader:
-                micro_batch = {
-                    key: value.to(torch.cuda.current_device())
-                    if isinstance(value, torch.Tensor) else value
-                    for key, value in micro_batch.items()
-                }
-                batch_tokens = micro_batch["stu_loss_mask"].sum().to(torch.cuda.current_device())
-                dist.all_reduce(batch_tokens, op=dist.ReduceOp.SUM)
-                micro_batch["avg_micro_batch_token_num"] = batch_tokens / dist.get_world_size()
-
-                metrics = self.strategy.all_reduce(
-                    self.kd_algorithm.training_step(micro_batch), op="mean"
-                )
-                weight = batch_tokens.item()
-                for key, value in metrics.items():
-                    value = value.item() if hasattr(value, "item") else float(value)
-                    metric_sums[key] += value * weight
-                num_tokens += weight
-        finally:
-            if was_training:
-                self.student.train()
-
-        if num_tokens == 0:
+        """Evaluate SFT loss without updating the student."""
+        eval_batches = list(self.eval_dataloader)
+        if not eval_batches:
             return {}
-        metrics = {key: value / num_tokens for key, value in metric_sums.items()}
-        metrics["eval/num_tokens"] = num_tokens / self.args.model.ring_attn_size
+        if self.args.train.use_dynamic_bsz:
+            eval_batches = rearrange_global_batch(
+                eval_batches,
+                max_token_len=self.args.train.max_token_len_per_gpu,
+                dp_size=self.dp_size,
+            )
+
+        if self.args.train.enable_sleep:
+            self.student.wakeup()
+        metrics = ray.get(self.student.async_run_eval(eval_batches))[0]
+        if self.args.train.enable_sleep:
+            self.student.sleep()
+
         return log_eval_metrics(self.strategy, self._wandb, metrics, self.global_step)
-            
-    def logging(self, step, current_log_state):
-        for key in current_log_state:
-            self.strategy.all_reduce(current_log_state[key], op="mean")
-        
-        for k in current_log_state:
-            self.log_state[k].append(current_log_state[k])
-                
-        if (step + 1) == self.strategy.accumulated_gradient and self.global_step % self.args.log.logging_steps == 0:
+
+    def logging(self):
+        if self.global_step % self.args.log.logging_steps == 0:
             total_steps = self.num_update_steps_per_epoch * self.epochs
             progress = self.global_step / total_steps
             elapsed = time.time() - self.start_time
@@ -276,9 +228,9 @@ class SFTTrainer:
                 "train_progress [{progress:.2f}%], " \
                 "Elapsed: {elapsed}, " \
                 "ETA: {eta}, ".format(
-                current_epoch=self.current_epoch + 1, 
-                total_epoch=self.epochs, 
-                current_step=self.global_step, 
+                current_epoch=self.current_epoch + 1,
+                total_epoch=self.epochs,
+                current_step=self.global_step,
                 total_step=total_steps,
                 progress=progress * 100,
                 elapsed=str(timedelta(seconds=elapsed)).split(".")[0],
@@ -287,22 +239,26 @@ class SFTTrainer:
             for k in self.log_state:
                 if isinstance(self.log_state[k], list) and len(self.log_state[k]) > 0:
                     self.log_state[k] = sum(self.log_state[k]) / len(self.log_state[k])
-            if dist.get_rank() == 0:
-                log_info = []
-                for k in sorted(self.log_state):
-                    if k == "train/lr":
-                        log_info.append(f"{k}: {self.log_state[k]:.6e}")
-                    else:
-                        log_info.append(f"{k}: {self.log_state[k]:.6f}")
-                log_str = ", ".join(log_info)
-                log_str = progress_str + log_str
-                self.strategy.log(log_str)
 
-                if self._wandb is not None:
-                    logs = {"train/global_step": self.global_step}
-                    for k in sorted(self.log_state):
-                        logs[k] = self.log_state[k]
-                    self._wandb.log(logs)
+            for key in self.metric_stats:
+                self.log_state.pop(key, None)
+            self.log_state.update(average_metric_stats(self.metric_stats))
+            self.metric_stats.clear()
+            log_info = []
+            for k in sorted(self.log_state):
+                if k == "train/lr":
+                    log_info.append(f"{k}: {self.log_state[k]:.6e}")
+                else:
+                    log_info.append(f"{k}: {self.log_state[k]:.6f}")
+            log_str = ", ".join(log_info)
+            log_str = progress_str + log_str
+            self.strategy.log(log_str)
+
+            if self._wandb is not None:
+                logs = {"train/global_step": self.global_step}
+                for k in sorted(self.log_state):
+                    logs[k] = self.log_state[k]
+                self._wandb.log(logs)
 
             for k in self.log_state:
                 self.log_state[k] = []

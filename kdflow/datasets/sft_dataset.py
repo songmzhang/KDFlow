@@ -2,10 +2,10 @@ from typing import Callable, Optional, Dict, List, Any
 
 import torch
 from torch.utils.data import Dataset
-from datasets import Image as ImageFeature
 from PIL import Image
 
 from kdflow.datasets.utils import (
+    compute_token_lengths,
     convert_to_openai_messages,
     get_tokenizer_or_processor,
     validate_dataset_columns,
@@ -99,14 +99,14 @@ class SFTDataset(Dataset):
             max(1, len(dataset) // 2000),
         )
         self.processed_dataset = dataset.map(
-            self.process_data,
+            self._process_batch,
+            batched=True,
+            batch_size=512,
             remove_columns=dataset.column_names,
             num_proc=num_processors,
             load_from_cache_file=False,
             desc="Processing data",
         )
-        if self.image_key:
-            self.processed_dataset = self.processed_dataset.cast_column("images", [ImageFeature()])
 
         original_len = len(self.processed_dataset)
         strategy.log(f"Before length filter: {len(self.processed_dataset)}")
@@ -132,6 +132,15 @@ class SFTDataset(Dataset):
             self.strategy.print("Teacher prompt + response:")
             self.strategy.print(sample["tea_prompt"] + sample["tea_response"])
 
+    def _process_batch(self, batch):
+        rows = [
+            self.process_data(dict(zip(batch, values)))
+            for values in zip(*batch.values())
+        ]
+        result = {key: [row[key] for row in rows] for key in rows[0]}
+        result.update(self._compute_lengths(result))
+        return result
+
     def process_data(self, data: Dict) -> Dict[str, Any]:
         stu_chat_template_fn = self.student_processor.apply_chat_template if self.apply_chat_template else None
         stu_prompt, stu_response = self.preprocess_data(
@@ -143,15 +152,9 @@ class SFTDataset(Dataset):
             stu_response += " " + stu_eos_token
 
         result = {"stu_prompt": stu_prompt, "stu_response": stu_response}
-        result["stu_resp_len"] = self._compute_token_length(
-            self.student_processor, stu_response
-        )
-        result["stu_input_len"] = self._compute_token_length(
-            self.student_processor, stu_prompt
-        ) + result["stu_resp_len"]
-
         if self.image_key is not None:
-            result["images"] = self.load_images(data[self.image_key])
+            images = data.get(self.image_key) or []
+            result["images"] = [images] if isinstance(images, str) else images
 
         if self.args.model.teacher_name_or_path is not None or self.is_multi_teacher_kd:
             if not self.teacher_student_share_input:
@@ -181,11 +184,9 @@ class SFTDataset(Dataset):
                     tea_response += " " + tea_eos_token
                 result["tea_prompt"] = tea_prompt
                 result["tea_response"] = tea_response
-                result["tea_resp_len"] = self._compute_token_length(teacher_processor, tea_response)
             else:
                 result["tea_prompt"] = stu_prompt
                 result["tea_response"] = stu_response
-                result["tea_resp_len"] = result["stu_resp_len"]
 
         # load teacher routing info of each data for multi-teacher distillation
         if self.is_multi_teacher_kd:
@@ -252,9 +253,37 @@ class SFTDataset(Dataset):
             return Image.open(img).convert("RGB")
         return None
 
-    def _compute_token_length(self, processor, text):
-        tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else processor
-        return len(tokenizer.encode(text, add_special_tokens=False))
+    def _compute_lengths(self, batch):
+        response_lengths = compute_token_lengths(
+            self.student_processor, batch["stu_response"], add_special_tokens=False,
+        )
+        prompt_lengths = compute_token_lengths(
+            self.student_processor, batch["stu_prompt"], add_special_tokens=False,
+        )
+        result = {
+            "stu_resp_len": response_lengths,
+            "stu_input_len": [p + r for p, r in zip(prompt_lengths, response_lengths)],
+        }
+        if "tea_response" in batch:
+            if self.teacher_student_share_input:
+                result["tea_resp_len"] = response_lengths
+            else:
+                # Group responses by teacher so each tokenizer runs in batches.
+                routing_keys = batch.get("teacher_routing_key", [None] * len(response_lengths))
+                groups = {}
+                for i, key in enumerate(routing_keys):
+                    groups.setdefault(key, []).append(i)
+                teacher_lengths = [0] * len(response_lengths)
+                for key, indices in groups.items():
+                    tokenizer = self._get_teacher_tokenizer({"teacher_routing_key": key})
+                    lengths = compute_token_lengths(
+                        tokenizer, [batch["tea_response"][i] for i in indices],
+                        add_special_tokens=False,
+                    )
+                    for i, length in zip(indices, lengths):
+                        teacher_lengths[i] = length
+                result["tea_resp_len"] = teacher_lengths
+        return result
 
     def _get_teacher_tokenizer(self, item):
         teacher_key = item.get("teacher_routing_key")
@@ -316,7 +345,7 @@ class SFTDataset(Dataset):
     def collate_fn(self, item_list: List[Dict]) -> Dict[str, torch.Tensor]:
         bsz = len(item_list)
         per_sample_images = (
-            [item["images"] for item in item_list]
+            [self.load_images(item["images"]) for item in item_list]
             if self.image_key else [None] * bsz
         )
 
@@ -341,7 +370,7 @@ class SFTDataset(Dataset):
             "stu_attn_mask": stu_attn_mask,
             "stu_loss_mask": stu_loss_mask,
         }
-        if any(e["multi_modal_inputs"] is not None for e in stu_encodings):
+        if self.image_key:
             batch["stu_multi_modal_inputs"] = [e["multi_modal_inputs"] for e in stu_encodings]
 
         if "tea_prompt" in item_list[0]:
